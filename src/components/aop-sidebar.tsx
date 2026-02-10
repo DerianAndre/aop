@@ -1,4 +1,4 @@
-import * as React from 'react'
+import * as React from "react";
 import {
   Target,
   LayoutDashboard,
@@ -7,10 +7,10 @@ import {
   FileText,
   Settings,
   Activity,
-} from 'lucide-react'
+} from "lucide-react";
 
-import { NavMain } from '@/components/nav-main'
-import { NavSecondary } from '@/components/nav-secondary'
+import { NavMain } from "@/components/nav-main";
+import { NavSecondary } from "@/components/nav-secondary";
 import {
   Sidebar,
   SidebarContent,
@@ -19,59 +19,59 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-} from '@/components/ui/sidebar'
-import { useAopStore } from '@/store/aop-store'
-import type { AppTab } from '@/store/types'
+} from "@/components/ui/sidebar";
+import { useAopStore } from "@/store/aop-store";
+import type { AppTab } from "@/store/types";
 
 const navItems = [
   {
-    title: 'Tasks',
-    url: '#',
-    icon: Target,
-    value: 'tasks' as AppTab,
-  },
-  {
-    title: 'Dashboard',
-    url: '#',
+    title: "Dashboard",
+    url: "#",
     icon: LayoutDashboard,
-    value: 'dashboard' as AppTab,
+    value: "dashboard" as AppTab,
   },
   {
-    title: 'Context',
-    url: '#',
+    title: "Tasks",
+    url: "#",
+    icon: Target,
+    value: "tasks" as AppTab,
+  },
+  {
+    title: "Context",
+    url: "#",
     icon: Brain,
-    value: 'context' as AppTab,
+    value: "context" as AppTab,
   },
   {
-    title: 'Mutations',
-    url: '#',
+    title: "Mutations",
+    url: "#",
     icon: GitPullRequest,
-    value: 'mutations' as AppTab,
+    value: "mutations" as AppTab,
   },
   {
-    title: 'Logs',
-    url: '#',
+    title: "Logs",
+    url: "#",
     icon: FileText,
-    value: 'logs' as AppTab,
+    value: "logs" as AppTab,
   },
-]
+];
 
 const secondaryItems = [
   {
-    title: 'System',
-    url: '#',
+    title: "System",
+    url: "#",
     icon: Settings,
-    value: 'system' as AppTab,
+    value: "system" as AppTab,
   },
-]
+];
 
 export function AopSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
-  const { activeTab, setActiveTab } = useAopStore()
+  const { activeTab, setActiveTab } = useAopStore();
 
   const handleNavClick = (value: AppTab) => (e: React.MouseEvent) => {
-    e.preventDefault()
-    setActiveTab(value)
-  }
+    e.preventDefault();
+    setActiveTab(value);
+  };
 
   return (
     <Sidebar collapsible="icon" {...props}>
@@ -113,5 +113,5 @@ export function AopSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         </div>
       </SidebarFooter>
     </Sidebar>
-  )
+  );
 }

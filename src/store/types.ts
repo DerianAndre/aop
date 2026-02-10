@@ -23,6 +23,9 @@ export interface AopStoreState {
   // System state
   indexStatus: IndexStatus | null
   sidecarHealth: SidecarHealth | null
+  targetProject: string
+  mcpCommand: string
+  mcpArgs: string
 }
 
 export interface ContextQuery {
@@ -67,6 +70,9 @@ export interface AopStoreActions {
   // System actions
   setIndexStatus: (status: IndexStatus) => void
   setSidecarHealth: (health: SidecarHealth) => void
+  setTargetProject: (value: string) => void
+  setMcpCommand: (value: string) => void
+  setMcpArgs: (value: string) => void
 
   // Event handler
   handleTauriEvent: (event: AopEvent) => void

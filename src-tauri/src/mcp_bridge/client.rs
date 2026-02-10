@@ -5,6 +5,8 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine as _;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -82,6 +84,7 @@ impl BridgeClient {
 
         let request_json = serde_json::to_string(request)
             .map_err(|error| format!("Failed to encode bridge request: {error}"))?;
+        let request_json_base64 = BASE64_STANDARD.encode(request_json.as_bytes());
 
         let output = Command::new("pnpm")
             .arg("--silent")
@@ -90,8 +93,8 @@ impl BridgeClient {
             .arg("exec")
             .arg("tsx")
             .arg("src/index.ts")
-            .arg("--request")
-            .arg(request_json)
+            .arg("--request-base64")
+            .arg(request_json_base64)
             .output()
             .await
             .map_err(|error| format!("Failed to execute MCP bridge process: {error}"))?;

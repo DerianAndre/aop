@@ -19,6 +19,9 @@ export const useAopStore = create<AopStore>()(
         taskFilter: {},
         indexStatus: null,
         sidecarHealth: null,
+        targetProject: '',
+        mcpCommand: '',
+        mcpArgs: '',
 
         // Actions
         addTask: (task) =>
@@ -62,6 +65,9 @@ export const useAopStore = create<AopStore>()(
 
         setIndexStatus: (status) => set({ indexStatus: status }),
         setSidecarHealth: (health) => set({ sidecarHealth: health }),
+        setTargetProject: (value) => set({ targetProject: value }),
+        setMcpCommand: (value) => set({ mcpCommand: value }),
+        setMcpArgs: (value) => set({ mcpArgs: value }),
 
         handleTauriEvent: (event) => {
           const { addTask, updateTask, addMutation, updateMutation } = get()
@@ -96,6 +102,9 @@ export const useAopStore = create<AopStore>()(
           // Only persist user preferences
           activeTab: state.activeTab,
           taskFilter: state.taskFilter,
+          targetProject: state.targetProject,
+          mcpCommand: state.mcpCommand,
+          mcpArgs: state.mcpArgs,
         }),
       }
     )

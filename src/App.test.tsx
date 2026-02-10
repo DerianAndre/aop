@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import App from '@/App'
@@ -47,16 +47,32 @@ describe('App', () => {
     })
   })
 
-  it('renders the task creation view', async () => {
+  it('opens task dialog and creates a task', async () => {
     render(<App />)
 
-    expect(
-      screen.getByRole('heading', { name: /Autonomous Orchestration Platform/i }),
-    ).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Create Task/i })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /Task Hierarchy/i })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /New Task/i }))
+    expect(screen.getByRole('dialog', { name: /Create Task/i })).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText(/Objective/i), {
+      target: { value: 'Bootstrap foundation' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /^Create Task$/i }))
 
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith('get_tasks')
+    })
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('create_task', {
+        input: {
+          parentId: null,
+          tier: 1,
+          domain: 'platform',
+          objective: 'Bootstrap foundation',
+          tokenBudget: 3000,
+        },
+      })
     })
   })
 })
