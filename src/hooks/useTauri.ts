@@ -14,12 +14,15 @@ import type {
   ListTaskMutationsInput,
   MutationPipelineResult,
   MutationRecord,
+  MutationRevisionResult,
   OrchestrationResult,
   QueryCodebaseInput,
   ReadTargetFileInput,
+  RequestMutationRevisionInput,
   RunMutationPipelineInput,
   SearchResult,
   SearchTargetFilesInput,
+  SetMutationStatusInput,
   TargetFileContent,
   TaskRecord,
   UserObjectiveInput,
@@ -52,6 +55,14 @@ export async function listTaskMutations(input: ListTaskMutationsInput): Promise<
 
 export async function runMutationPipeline(input: RunMutationPipelineInput): Promise<MutationPipelineResult> {
   return invoke<MutationPipelineResult>('run_mutation_pipeline', { input })
+}
+
+export async function setMutationStatus(input: SetMutationStatusInput): Promise<MutationRecord> {
+  return invoke<MutationRecord>('set_mutation_status', { input })
+}
+
+export async function requestMutationRevision(input: RequestMutationRevisionInput): Promise<MutationRevisionResult> {
+  return invoke<MutationRevisionResult>('request_mutation_revision', { input })
 }
 
 export async function listAuditLog(input: ListAuditLogInput): Promise<AuditLogEntry[]> {

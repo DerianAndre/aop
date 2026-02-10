@@ -116,6 +116,28 @@ export interface MutationRecord {
   appliedAt: number | null
 }
 
+export type MutationStatus = 'proposed' | 'validated' | 'validated_no_tests' | 'applied' | 'rejected'
+
+export interface SetMutationStatusInput {
+  mutationId: string
+  status: MutationStatus
+  testResult?: string
+  testExitCode?: number
+  rejectionReason?: string
+  rejectedAtStep?: string
+}
+
+export interface RequestMutationRevisionInput {
+  mutationId: string
+  note: string
+}
+
+export interface MutationRevisionResult {
+  originalMutation: MutationRecord
+  revisedTask: TaskRecord
+  revisedMutation: MutationRecord
+}
+
 export interface RunMutationPipelineInput {
   mutationId: string
   targetProject: string

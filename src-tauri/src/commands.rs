@@ -3,13 +3,16 @@ use tauri::State;
 use crate::agents::domain_leader::{self, ExecuteDomainTaskInput, IntentSummary};
 use crate::agents::orchestrator::{self, OrchestrationResult, UserObjectiveInput};
 use crate::db::metrics::{self, AuditLogEntry, ListAuditLogInput};
-use crate::db::mutations::{self, ListTaskMutationsInput, MutationRecord};
+use crate::db::mutations::{
+    self, ListTaskMutationsInput, MutationRecord, UpdateMutationStatusInput,
+};
 use crate::db::tasks::{self, CreateTaskInput, TaskRecord, UpdateTaskStatusInput};
 use crate::mcp_bridge::tool_caller::{
     self, DirectoryListing, ListTargetDirInput, ReadTargetFileInput, SearchResult,
     SearchTargetFilesInput, TargetFileContent,
 };
 use crate::mutation_pipeline::{self, MutationPipelineResult, RunMutationPipelineInput};
+use crate::mutation_revision::{self, MutationRevisionResult, RequestMutationRevisionInput};
 use crate::vector::indexer;
 use crate::vector::search;
 use crate::vector::{ContextChunk, IndexProjectInput, IndexProjectResult, QueryCodebaseInput};
@@ -66,6 +69,31 @@ pub async fn run_mutation_pipeline(
     input: RunMutationPipelineInput,
 ) -> Result<MutationPipelineResult, String> {
     mutation_pipeline::run_mutation_pipeline(&state.db_pool, input).await
+}
+
+#[tauri::command]
+pub async fn set_mutation_status(
+    state: State<'_, AppState>,
+    input: UpdateMutationStatusInput,
+) -> Result<MutationRecord, String> {
+    let updated = mutations::update_mutation_status(&state.db_pool, input).await?;
+    metrics::record_audit_event(
+        &state.db_pool,
+        "ui",
+        "mutation_status_changed",
+        Some(updated.id.as_str()),
+        Some(&format!("{{\"status\":\"{}\"}}", updated.status)),
+    )
+    .await?;
+    Ok(updated)
+}
+
+#[tauri::command]
+pub async fn request_mutation_revision(
+    state: State<'_, AppState>,
+    input: RequestMutationRevisionInput,
+) -> Result<MutationRevisionResult, String> {
+    mutation_revision::request_mutation_revision(&state.db_pool, input).await
 }
 
 #[tauri::command]

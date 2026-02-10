@@ -13,7 +13,9 @@ import {
   orchestrateObjective,
   queryCodebase,
   readTargetFile,
+  requestMutationRevision,
   runMutationPipeline,
+  setMutationStatus,
   searchTargetFiles,
 } from '@/hooks/useTauri'
 import { cn } from '@/lib/utils'
@@ -35,6 +37,10 @@ import type {
   TaskRecord,
   TaskStatus,
 } from '@/types'
+import ConflictResolutionPanel from '@/components/ConflictResolutionPanel'
+import DiffReviewer from '@/components/DiffReviewer'
+import TaskGraph from '@/components/TaskGraph'
+import TokenBurnChart from '@/components/TokenBurnChart'
 
 const STATUS_CLASS: Record<TaskStatus, string> = {
   pending: 'status-pending',
@@ -88,6 +94,13 @@ function mutationStatusClass(status: string): string {
   return 'status-pending'
 }
 
+function stepStatusClass(status: string): string {
+  if (status === 'passed') return 'status-completed'
+  if (status === 'failed') return 'status-failed'
+  if (status === 'pending') return 'status-paused'
+  return 'status-pending'
+}
+
 function App() {
   const [tasks, setTasks] = useState<TaskRecord[]>([])
   const [formState, setFormState] = useState<CreateTaskInput>(DEFAULT_FORM)
@@ -111,6 +124,13 @@ function App() {
   const [pipelineResult, setPipelineResult] = useState<MutationPipelineResult | null>(null)
   const [pipelineSteps, setPipelineSteps] = useState<PipelineStepResult[]>([])
   const [auditEntries, setAuditEntries] = useState<AuditLogEntry[]>([])
+  const [selectedGraphTaskId, setSelectedGraphTaskId] = useState<string | null>(null)
+  const [selectedMutationId, setSelectedMutationId] = useState<string | null>(null)
+  const [selectedMutationOriginal, setSelectedMutationOriginal] = useState('')
+  const [reviewerFeedback, setReviewerFeedback] = useState<string | null>(null)
+  const [isLoadingReviewer, setIsLoadingReviewer] = useState(false)
+  const [isRequestingRevision, setIsRequestingRevision] = useState(false)
+  const [conflictFeedback, setConflictFeedback] = useState<string | null>(null)
 
   const [targetProject, setTargetProject] = useState('')
   const [mcpCommand, setMcpCommand] = useState('')
@@ -131,6 +151,11 @@ function App() {
     const count = tasks.length
     return `${count} task${count === 1 ? '' : 's'}`
   }, [tasks.length])
+
+  const selectedMutation = useMemo(
+    () => tier2Mutations.find((mutation) => mutation.id === selectedMutationId) ?? null,
+    [tier2Mutations, selectedMutationId],
+  )
 
   useEffect(() => {
     void loadTasks()
@@ -252,6 +277,11 @@ function App() {
       const mutations = await listTaskMutations({ taskId })
       setTier2Summary(summary)
       setTier2Mutations(mutations)
+      setSelectedGraphTaskId(taskId)
+      if (mutations.length > 0) {
+        setSelectedMutationId(mutations[0].id)
+        await loadOriginalForMutation(mutations[0])
+      }
       setPipelineResult(null)
       setPipelineSteps([])
       setAuditEntries([])
@@ -298,6 +328,171 @@ function App() {
       setIsRunningPipeline(false)
       setActiveMutationId(null)
     }
+  }
+
+  async function loadOriginalForMutation(mutation: MutationRecord): Promise<void> {
+    const target = targetProject.trim()
+    if (!target) {
+      setSelectedMutationOriginal('')
+      return
+    }
+
+    setIsLoadingReviewer(true)
+    try {
+      const file = await readTargetFile({
+        targetProject: target,
+        filePath: mutation.filePath,
+        ...buildMcpConfig(),
+      })
+      setSelectedMutationOriginal(file.content)
+    } catch (error) {
+      setSelectedMutationOriginal('')
+      setReviewerFeedback(error instanceof Error ? error.message : String(error))
+    } finally {
+      setIsLoadingReviewer(false)
+    }
+  }
+
+  async function loadMutationsForTask(taskId: string, openReviewer: boolean): Promise<void> {
+    setSelectedGraphTaskId(taskId)
+    setTier2Feedback(null)
+
+    try {
+      const mutations = await listTaskMutations({ taskId })
+      setTier2Mutations(mutations)
+      if (openReviewer && mutations.length > 0) {
+        setSelectedMutationId(mutations[0].id)
+        await loadOriginalForMutation(mutations[0])
+      }
+    } catch (error) {
+      setTier2Feedback(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  async function handleGraphTaskClick(taskId: string): Promise<void> {
+    await loadMutationsForTask(taskId, false)
+  }
+
+  async function handleGraphTaskDoubleClick(taskId: string): Promise<void> {
+    await loadMutationsForTask(taskId, true)
+  }
+
+  async function handleSelectMutationForReview(mutationId: string): Promise<void> {
+    const mutation = tier2Mutations.find((value) => value.id === mutationId)
+    setSelectedMutationId(mutationId)
+    if (mutation) {
+      await loadOriginalForMutation(mutation)
+    }
+  }
+
+  async function handleApproveMutation(mutationId: string): Promise<void> {
+    await handleRunMutationPipeline(mutationId, true)
+  }
+
+  async function handleRejectMutation(mutationId: string, reason: string): Promise<void> {
+    setReviewerFeedback(null)
+    try {
+      await setMutationStatus({
+        mutationId,
+        status: 'rejected',
+        rejectionReason: reason,
+        rejectedAtStep: 'diff_reviewer',
+      })
+      if (selectedGraphTaskId) {
+        const refreshed = await listTaskMutations({ taskId: selectedGraphTaskId })
+        setTier2Mutations(refreshed)
+      }
+      const audit = await listAuditLog({ targetId: mutationId, limit: 50 })
+      setAuditEntries(audit)
+    } catch (error) {
+      setReviewerFeedback(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  async function handleRequestRevision(mutationId: string, note: string): Promise<void> {
+    setReviewerFeedback(null)
+    setIsRequestingRevision(true)
+
+    try {
+      const result = await requestMutationRevision({
+        mutationId,
+        note: note.trim(),
+      })
+
+      await loadTasks()
+      setSelectedGraphTaskId(result.revisedTask.id)
+      setSelectedMutationId(result.revisedMutation.id)
+      setTier2Mutations([result.revisedMutation])
+      await loadOriginalForMutation(result.revisedMutation)
+
+      const audit = await listAuditLog({ targetId: result.originalMutation.id, limit: 50 })
+      setAuditEntries(audit)
+      setReviewerFeedback(
+        `Revision created: task ${result.revisedTask.id.slice(0, 8)} / mutation ${result.revisedMutation.id.slice(0, 8)}.`,
+      )
+    } catch (error) {
+      setReviewerFeedback(error instanceof Error ? error.message : String(error))
+    } finally {
+      setIsRequestingRevision(false)
+    }
+  }
+
+  async function handleConflictAccept(agentUid: string): Promise<void> {
+    setConflictFeedback(null)
+    const mutation = tier2Mutations.find((value) => value.agentUid === agentUid)
+    if (!mutation) {
+      setConflictFeedback('Unable to locate mutation for selected proposal.')
+      return
+    }
+
+    await handleRunMutationPipeline(mutation.id, true)
+  }
+
+  async function handleConflictRejectBoth(agentUidA: string, agentUidB: string): Promise<void> {
+    setConflictFeedback(null)
+    const mutationA = tier2Mutations.find((value) => value.agentUid === agentUidA)
+    const mutationB = tier2Mutations.find((value) => value.agentUid === agentUidB)
+    if (!mutationA || !mutationB) {
+      setConflictFeedback('Unable to locate both mutations for rejection.')
+      return
+    }
+
+    try {
+      await Promise.all([
+        setMutationStatus({
+          mutationId: mutationA.id,
+          status: 'rejected',
+          rejectionReason: 'Conflict resolution rejected both proposals.',
+          rejectedAtStep: 'conflict_resolution',
+        }),
+        setMutationStatus({
+          mutationId: mutationB.id,
+          status: 'rejected',
+          rejectionReason: 'Conflict resolution rejected both proposals.',
+          rejectedAtStep: 'conflict_resolution',
+        }),
+      ])
+
+      if (selectedGraphTaskId) {
+        const refreshed = await listTaskMutations({ taskId: selectedGraphTaskId })
+        setTier2Mutations(refreshed)
+      }
+      setConflictFeedback('Both proposals were rejected.')
+    } catch (error) {
+      setConflictFeedback(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  function handleConflictMergeManually(): void {
+    const mutation = tier2Mutations[0]
+    if (!mutation) {
+      setConflictFeedback('No mutation available for manual merge.')
+      return
+    }
+
+    setSelectedMutationId(mutation.id)
+    setConflictFeedback('Manual merge selected: review the mutation in Diff Reviewer and apply custom edits.')
+    void loadOriginalForMutation(mutation)
   }
 
   function buildMcpConfig() {
@@ -606,6 +801,36 @@ function App() {
 
       <section className="card browser-card">
         <div className="card-header">
+          <h2 className="card-title">Task Graph (React Flow)</h2>
+        </div>
+        <div className="card-content">
+          <p className="meta-inline">
+            Click a node to inspect its mutations. Double-click to open Diff Reviewer context for that task.
+          </p>
+          <TaskGraph
+            tasks={tasks}
+            selectedTaskId={selectedGraphTaskId}
+            onTaskClick={(taskId) => {
+              void handleGraphTaskClick(taskId)
+            }}
+            onTaskDoubleClick={(taskId) => {
+              void handleGraphTaskDoubleClick(taskId)
+            }}
+          />
+        </div>
+      </section>
+
+      <section className="card browser-card">
+        <div className="card-header">
+          <h2 className="card-title">Token Burn Chart</h2>
+        </div>
+        <div className="card-content">
+          <TokenBurnChart tasks={tasks} />
+        </div>
+      </section>
+
+      <section className="card browser-card">
+        <div className="card-header">
           <h2 className="card-title">Tier 1 Orchestrator</h2>
         </div>
         <div className="card-content">
@@ -744,6 +969,13 @@ function App() {
                       <button
                         className="tier2-run-button"
                         type="button"
+                        onClick={() => void handleSelectMutationForReview(mutation.id)}
+                      >
+                        Open Reviewer
+                      </button>
+                      <button
+                        className="tier2-run-button"
+                        type="button"
                         disabled={isRunningPipeline && activeMutationId === mutation.id}
                         onClick={() => void handleRunMutationPipeline(mutation.id, false)}
                       >
@@ -784,7 +1016,7 @@ function App() {
                   <li className="orchestration-item" key={step.step}>
                     <div className="task-row">
                       <span className="task-domain">{step.step}</span>
-                      <span className={cn('status-pill', mutationStatusClass(step.status === 'failed' ? 'rejected' : 'validated'))}>
+                      <span className={cn('status-pill', stepStatusClass(step.status))}>
                         {step.status}
                       </span>
                     </div>
@@ -808,6 +1040,40 @@ function App() {
               </ul>
             </div>
           ) : null}
+        </div>
+      </section>
+
+      <ConflictResolutionPanel
+        conflict={tier2Summary?.conflicts}
+        mutations={tier2Mutations}
+        proposals={tier2Summary?.proposals ?? []}
+        onAcceptProposal={handleConflictAccept}
+        onRejectBoth={handleConflictRejectBoth}
+        onMergeManually={handleConflictMergeManually}
+      />
+
+      {conflictFeedback ? (
+        <section className="card browser-card">
+          <div className="card-content">
+            <p className="feedback">{conflictFeedback}</p>
+          </div>
+        </section>
+      ) : null}
+
+      <section className="card browser-card">
+        <div className="card-header">
+          <h2 className="card-title">Diff Reviewer</h2>
+        </div>
+        <div className="card-content">
+          {reviewerFeedback ? <p className="feedback">{reviewerFeedback}</p> : null}
+          <DiffReviewer
+            isBusy={isRunningPipeline || isLoadingReviewer || isRequestingRevision}
+            mutation={selectedMutation}
+            originalContent={selectedMutationOriginal}
+            onApprove={handleApproveMutation}
+            onReject={handleRejectMutation}
+            onRequestRevision={handleRequestRevision}
+          />
         </div>
       </section>
 

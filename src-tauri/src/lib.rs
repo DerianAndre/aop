@@ -3,6 +3,7 @@ mod commands;
 mod db;
 mod mcp_bridge;
 mod mutation_pipeline;
+mod mutation_revision;
 mod vector;
 
 use std::fs;
@@ -61,6 +62,8 @@ pub fn run() {
             commands::execute_domain_task,
             commands::list_task_mutations,
             commands::run_mutation_pipeline,
+            commands::set_mutation_status,
+            commands::request_mutation_revision,
             commands::list_audit_log,
             commands::get_default_target_project,
             commands::list_target_dir,
