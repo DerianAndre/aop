@@ -3,10 +3,12 @@ import type { FormEvent } from 'react'
 
 import {
   createTask,
+  executeDomainTask,
   getDefaultTargetProject,
   getTasks,
   indexTargetProject,
   listTargetDir,
+  listTaskMutations,
   orchestrateObjective,
   queryCodebase,
   readTargetFile,
@@ -19,6 +21,8 @@ import type {
   DirectoryEntry,
   DirectoryListing,
   IndexProjectResult,
+  IntentSummary,
+  MutationRecord,
   OrchestrationResult,
   SearchResult,
   TargetFileContent,
@@ -84,6 +88,11 @@ function App() {
   const [isOrchestrating, setIsOrchestrating] = useState(false)
   const [orchestrationResult, setOrchestrationResult] = useState<OrchestrationResult | null>(null)
   const [orchestratorFeedback, setOrchestratorFeedback] = useState<string | null>(null)
+  const [isExecutingTier2, setIsExecutingTier2] = useState(false)
+  const [tier2Summary, setTier2Summary] = useState<IntentSummary | null>(null)
+  const [tier2Mutations, setTier2Mutations] = useState<MutationRecord[]>([])
+  const [tier2Feedback, setTier2Feedback] = useState<string | null>(null)
+  const [activeTier2TaskId, setActiveTier2TaskId] = useState<string | null>(null)
 
   const [targetProject, setTargetProject] = useState('')
   const [mcpCommand, setMcpCommand] = useState('')
@@ -200,6 +209,37 @@ function App() {
       setOrchestratorFeedback(error instanceof Error ? error.message : String(error))
     } finally {
       setIsOrchestrating(false)
+    }
+  }
+
+  async function handleExecuteTier2Task(taskId: string): Promise<void> {
+    const target = targetProject.trim()
+    if (!target) {
+      setTier2Feedback('Target project path is required before running Tier 2.')
+      return
+    }
+
+    setIsExecutingTier2(true)
+    setActiveTier2TaskId(taskId)
+    setTier2Feedback(null)
+
+    try {
+      const summary = await executeDomainTask({
+        taskId,
+        targetProject: target,
+        topK: 8,
+        ...buildMcpConfig(),
+      })
+
+      const mutations = await listTaskMutations({ taskId })
+      setTier2Summary(summary)
+      setTier2Mutations(mutations)
+      await loadTasks()
+    } catch (error) {
+      setTier2Feedback(error instanceof Error ? error.message : String(error))
+    } finally {
+      setIsExecutingTier2(false)
+      setActiveTier2TaskId(null)
     }
   }
 
@@ -373,7 +413,7 @@ function App() {
         <div>
           <h1 className="app-title">Autonomous Orchestration Platform</h1>
           <p className="app-subtitle">
-            Phase 4 adds Tier 1 objective decomposition with PRA risk scoring and budget allocation.
+            Phase 5 adds Tier 2 orchestration and Tier 3 specialist diff proposals with attribution.
           </p>
         </div>
         <strong>{taskCountLabel}</strong>
@@ -488,6 +528,17 @@ function App() {
                       <span>Budget {task.tokenBudget}</span>
                       <span>Created {formatTimestamp(task.createdAt)}</span>
                     </div>
+
+                    {task.tier === 2 ? (
+                      <button
+                        className="tier2-run-button"
+                        type="button"
+                        disabled={isExecutingTier2 && activeTier2TaskId === task.id}
+                        onClick={() => void handleExecuteTier2Task(task.id)}
+                      >
+                        {isExecutingTier2 && activeTier2TaskId === task.id ? 'Running Tier 2...' : 'Run Tier 2'}
+                      </button>
+                    ) : null}
                   </li>
                 ))}
               </ul>
@@ -568,6 +619,57 @@ function App() {
                   </li>
                 ))}
               </ul>
+            </div>
+          ) : null}
+        </div>
+      </section>
+
+      <section className="card browser-card">
+        <div className="card-header">
+          <h2 className="card-title">Tier 2 Execution Output</h2>
+        </div>
+        <div className="card-content">
+          <p className="meta-inline">
+            Execute a Tier 2 task from the task list to spawn Tier 3 specialists and generate diff proposals.
+          </p>
+
+          {tier2Feedback ? <p className="feedback">{tier2Feedback}</p> : null}
+
+          {tier2Summary ? (
+            <div className="orchestration-result">
+              <div className="task-meta">
+                <span>Task {tier2Summary.taskId}</span>
+                <span>Domain {tier2Summary.domain}</span>
+                <span>Status {tier2Summary.status}</span>
+                <span>Compliance {tier2Summary.complianceScore}</span>
+                <span>Tokens {tier2Summary.tokensSpent}</span>
+              </div>
+              <p className="task-objective">{tier2Summary.summary}</p>
+              {tier2Summary.conflicts ? (
+                <p className="feedback">
+                  Conflict: {tier2Summary.conflicts.description} (distance{' '}
+                  {tier2Summary.conflicts.semanticDistance.toFixed(3)})
+                </p>
+              ) : null}
+
+              <ul className="orchestration-list">
+                {tier2Summary.proposals.map((proposal) => (
+                  <li className="orchestration-item" key={proposal.proposalId}>
+                    <div className="task-row">
+                      <span className="task-domain">{proposal.filePath}</span>
+                      <span className="meta-inline">confidence {proposal.confidence.toFixed(2)}</span>
+                    </div>
+                    <p className="task-objective">{proposal.intentDescription}</p>
+                    <div className="task-meta">
+                      <span>Agent {proposal.agentUid.slice(0, 8)}</span>
+                      <span>Tokens {proposal.tokensUsed}</span>
+                    </div>
+                    <pre className="file-preview">{proposal.diffContent.slice(0, 800)}</pre>
+                  </li>
+                ))}
+              </ul>
+
+              <p className="meta-inline">Persisted mutations: {tier2Mutations.length}</p>
             </div>
           ) : null}
         </div>

@@ -1,6 +1,8 @@
 use tauri::State;
 
+use crate::agents::domain_leader::{self, ExecuteDomainTaskInput, IntentSummary};
 use crate::agents::orchestrator::{self, OrchestrationResult, UserObjectiveInput};
+use crate::db::mutations::{self, ListTaskMutationsInput, MutationRecord};
 use crate::db::tasks::{self, CreateTaskInput, TaskRecord, UpdateTaskStatusInput};
 use crate::mcp_bridge::tool_caller::{
     self, DirectoryListing, ListTargetDirInput, ReadTargetFileInput, SearchResult,
@@ -38,6 +40,22 @@ pub async fn orchestrate_objective(
     input: UserObjectiveInput,
 ) -> Result<OrchestrationResult, String> {
     orchestrator::orchestrate_and_persist(&state.db_pool, input).await
+}
+
+#[tauri::command]
+pub async fn execute_domain_task(
+    state: State<'_, AppState>,
+    input: ExecuteDomainTaskInput,
+) -> Result<IntentSummary, String> {
+    domain_leader::execute_domain_task(&state.db_pool, &state.bridge_client, input).await
+}
+
+#[tauri::command]
+pub async fn list_task_mutations(
+    state: State<'_, AppState>,
+    input: ListTaskMutationsInput,
+) -> Result<Vec<MutationRecord>, String> {
+    mutations::list_mutations_for_task(&state.db_pool, input).await
 }
 
 #[tauri::command]

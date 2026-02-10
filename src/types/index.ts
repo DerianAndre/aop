@@ -55,6 +55,67 @@ export interface OrchestrationResult {
   distributedBudget: number
 }
 
+export interface ExecuteDomainTaskInput {
+  taskId: string
+  targetProject: string
+  topK?: number
+  mcpCommand?: string
+  mcpArgs?: string[]
+}
+
+export interface DiffProposal {
+  proposalId: string
+  taskId: string
+  agentUid: string
+  filePath: string
+  diffContent: string
+  intentDescription: string
+  intentHash: string
+  confidence: number
+  tokensUsed: number
+}
+
+export interface ConflictReport {
+  agentA: string
+  agentB: string
+  semanticDistance: number
+  description: string
+  requiresHumanReview: boolean
+}
+
+export interface IntentSummary {
+  taskId: string
+  domain: string
+  status: 'ready_for_review' | 'consensus_failed' | 'blocked'
+  proposals: DiffProposal[]
+  complianceScore: number
+  tokensSpent: number
+  summary: string
+  conflicts?: ConflictReport
+}
+
+export interface ListTaskMutationsInput {
+  taskId: string
+}
+
+export interface MutationRecord {
+  id: string
+  taskId: string
+  agentUid: string
+  filePath: string
+  diffContent: string
+  intentDescription: string | null
+  intentHash: string | null
+  confidence: number
+  testResult: string | null
+  testExitCode: number | null
+  rejectionReason: string | null
+  rejectedAtStep: string | null
+  status: string
+  proposedAt: number
+  appliedAt: number | null
+}
+
 export interface UpdateTaskStatusInput {
   taskId: string
   status: TaskStatus

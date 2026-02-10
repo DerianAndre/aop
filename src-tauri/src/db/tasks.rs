@@ -182,7 +182,7 @@ pub async fn update_task_status(
     get_task_by_id(pool, input.task_id.trim()).await
 }
 
-async fn get_task_by_id(pool: &SqlitePool, task_id: &str) -> Result<TaskRecord, String> {
+pub async fn get_task_by_id(pool: &SqlitePool, task_id: &str) -> Result<TaskRecord, String> {
     sqlx::query_as::<_, TaskRecord>(
         r#"
         SELECT

@@ -4,9 +4,13 @@ import type {
   CreateTaskInput,
   ContextChunk,
   DirectoryListing,
+  ExecuteDomainTaskInput,
   IndexProjectResult,
   IndexTargetProjectInput,
+  IntentSummary,
   ListTargetDirInput,
+  ListTaskMutationsInput,
+  MutationRecord,
   OrchestrationResult,
   QueryCodebaseInput,
   ReadTargetFileInput,
@@ -32,6 +36,14 @@ export async function updateTaskStatus(input: UpdateTaskStatusInput): Promise<Ta
 
 export async function orchestrateObjective(input: UserObjectiveInput): Promise<OrchestrationResult> {
   return invoke<OrchestrationResult>('orchestrate_objective', { input })
+}
+
+export async function executeDomainTask(input: ExecuteDomainTaskInput): Promise<IntentSummary> {
+  return invoke<IntentSummary>('execute_domain_task', { input })
+}
+
+export async function listTaskMutations(input: ListTaskMutationsInput): Promise<MutationRecord[]> {
+  return invoke<MutationRecord[]>('list_task_mutations', { input })
 }
 
 export async function getDefaultTargetProject(): Promise<string> {

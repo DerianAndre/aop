@@ -57,6 +57,8 @@ pub fn run() {
             commands::get_tasks,
             commands::update_task_status,
             commands::orchestrate_objective,
+            commands::execute_domain_task,
+            commands::list_task_mutations,
             commands::get_default_target_project,
             commands::list_target_dir,
             commands::read_target_file,
