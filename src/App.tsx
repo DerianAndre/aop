@@ -5,15 +5,19 @@ import {
   createTask,
   getDefaultTargetProject,
   getTasks,
+  indexTargetProject,
   listTargetDir,
+  queryCodebase,
   readTargetFile,
   searchTargetFiles,
 } from '@/hooks/useTauri'
 import { cn } from '@/lib/utils'
 import type {
+  ContextChunk,
   CreateTaskInput,
   DirectoryEntry,
   DirectoryListing,
+  IndexProjectResult,
   SearchResult,
   TargetFileContent,
   TaskRecord,
@@ -71,6 +75,11 @@ function App() {
   const [searchResult, setSearchResult] = useState<SearchResult | null>(null)
   const [isBrowsing, setIsBrowsing] = useState(false)
   const [browserFeedback, setBrowserFeedback] = useState<string | null>(null)
+  const [semanticQuery, setSemanticQuery] = useState('')
+  const [semanticResults, setSemanticResults] = useState<ContextChunk[]>([])
+  const [indexResult, setIndexResult] = useState<IndexProjectResult | null>(null)
+  const [isIndexing, setIsIndexing] = useState(false)
+  const [isSemanticSearching, setIsSemanticSearching] = useState(false)
 
   const taskCountLabel = useMemo(() => {
     const count = tasks.length
@@ -238,13 +247,71 @@ function App() {
     }
   }
 
+  async function handleIndexProject(): Promise<void> {
+    const target = targetProject.trim()
+    if (!target) {
+      setBrowserFeedback('Target project path is required.')
+      return
+    }
+
+    setIsIndexing(true)
+    setBrowserFeedback(null)
+
+    try {
+      const result = await indexTargetProject({ targetProject: target })
+      setIndexResult(result)
+      setSemanticResults([])
+      setBrowserFeedback(
+        `Indexed ${result.indexedFiles} files into ${result.indexedChunks} chunks (table: ${result.tableName}).`,
+      )
+    } catch (error) {
+      setBrowserFeedback(error instanceof Error ? error.message : String(error))
+    } finally {
+      setIsIndexing(false)
+    }
+  }
+
+  async function handleSemanticSearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const target = targetProject.trim()
+    const query = semanticQuery.trim()
+
+    if (!target) {
+      setBrowserFeedback('Target project path is required.')
+      return
+    }
+    if (!query) {
+      setBrowserFeedback('Semantic query is required.')
+      return
+    }
+
+    setIsSemanticSearching(true)
+    setBrowserFeedback(null)
+
+    try {
+      const results = await queryCodebase({
+        targetProject: target,
+        query,
+        topK: 5,
+      })
+      setSemanticResults(results)
+      if (results.length === 0) {
+        setBrowserFeedback('No semantic chunks found. Run indexing first or broaden the query.')
+      }
+    } catch (error) {
+      setBrowserFeedback(error instanceof Error ? error.message : String(error))
+    } finally {
+      setIsSemanticSearching(false)
+    }
+  }
+
   return (
     <main className="app-shell">
       <header className="app-header">
         <div>
           <h1 className="app-title">Autonomous Orchestration Platform</h1>
           <p className="app-subtitle">
-            Phase 2 adds the MCP bridge and target-project file browsing over Tauri commands.
+            Phase 3 adds semantic indexing and natural-language retrieval for target codebases.
           </p>
         </div>
         <strong>{taskCountLabel}</strong>
@@ -430,6 +497,32 @@ function App() {
             </button>
           </form>
 
+          <div className="semantic-toolbar">
+            <button disabled={isIndexing} type="button" onClick={() => void handleIndexProject()}>
+              {isIndexing ? 'Indexing...' : 'Index Project'}
+            </button>
+            <span className="meta-inline">
+              {indexResult
+                ? `${indexResult.indexedFiles} files / ${indexResult.indexedChunks} chunks`
+                : 'Run indexing before semantic query'}
+            </span>
+          </div>
+
+          <form className="browser-search" onSubmit={handleSemanticSearch}>
+            <div className="field">
+              <label htmlFor="semantic-query">Semantic Query</label>
+              <input
+                id="semantic-query"
+                value={semanticQuery}
+                onChange={(event) => setSemanticQuery(event.target.value)}
+                placeholder="components using session loading state"
+              />
+            </div>
+            <button disabled={isSemanticSearching} type="submit">
+              {isSemanticSearching ? 'Querying...' : 'Semantic Query'}
+            </button>
+          </form>
+
           {browserFeedback ? <p className="feedback">{browserFeedback}</p> : null}
 
           <div className="browser-grid">
@@ -444,6 +537,7 @@ function App() {
                 {directory?.parent ? (
                   <button
                     className="browser-entry"
+                    type="button"
                     onClick={() => void browseDirectory(directory.parent ?? '.')}
                   >
                     <span className="browser-entry-icon">DIR</span>
@@ -455,6 +549,7 @@ function App() {
                   <button
                     className="browser-entry"
                     key={entry.path}
+                    type="button"
                     onClick={() => (entry.isDir ? void browseDirectory(entry.path) : void openFile(entry.path))}
                   >
                     <span className="browser-entry-icon">{entryIcon(entry)}</span>
@@ -479,21 +574,42 @@ function App() {
 
             <div className="browser-panel">
               <div className="browser-panel-header">
-                <strong>Search Results</strong>
+                <strong>Search Outputs</strong>
                 <span className="meta-inline">
-                  {searchResult ? `${searchResult.matches.length} matches` : 'No search yet'}
+                  {searchResult ? `${searchResult.matches.length} file matches` : 'No search yet'}
                 </span>
               </div>
 
               <ul className="search-list">
                 {searchResult?.matches.map((match) => (
                   <li key={`${match.path}-${match.line ?? 0}`}>
-                    <button className="search-match" onClick={() => void openFile(match.path)}>
+                    <button className="search-match" type="button" onClick={() => void openFile(match.path)}>
                       <span>{match.path}</span>
                       {match.line ? <span className="meta-inline">line {match.line}</span> : null}
                     </button>
                   </li>
                 ))}
+              </ul>
+
+              <div className="search-divider" />
+
+              <ul className="search-list">
+                {semanticResults.map((chunk) => (
+                  <li key={chunk.id}>
+                    <button className="search-match" type="button" onClick={() => void openFile(chunk.filePath)}>
+                      <span>
+                        {chunk.filePath}:{chunk.startLine}
+                      </span>
+                      <span className="meta-inline">score {chunk.score.toFixed(3)}</span>
+                    </button>
+                    <p className="chunk-preview">{chunk.content.slice(0, 140)}</p>
+                  </li>
+                ))}
+                {semanticResults.length === 0 ? (
+                  <li>
+                    <p className="empty-state">No semantic query results yet.</p>
+                  </li>
+                ) : null}
               </ul>
             </div>
           </div>

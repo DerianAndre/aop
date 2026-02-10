@@ -1,6 +1,7 @@
 mod commands;
 mod db;
 mod mcp_bridge;
+mod vector;
 
 use std::fs;
 use std::io;
@@ -57,7 +58,9 @@ pub fn run() {
             commands::get_default_target_project,
             commands::list_target_dir,
             commands::read_target_file,
-            commands::search_target_files
+            commands::search_target_files,
+            commands::index_target_project,
+            commands::query_codebase
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

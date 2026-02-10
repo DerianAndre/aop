@@ -1,6 +1,6 @@
 # Autonomous Orchestration Platform (AOP)
 
-Phases 1-2 foundation for a Tauri v2 desktop app with React frontend, SQLite backend, and an MCP bridge.
+Phases 1-3 foundation for a Tauri v2 desktop app with React frontend, SQLite backend, MCP bridge, and semantic indexing.
 
 ## What Is Implemented
 
@@ -29,6 +29,16 @@ Phases 1-2 foundation for a Tauri v2 desktop app with React frontend, SQLite bac
   - Directory browser
   - File preview
   - Search panel
+- Phase 3 semantic engine:
+  - Target project indexing into `aop_vector_chunks` (SQLite-backed embeddings)
+  - Natural-language retrieval over indexed chunks
+- New Tauri commands:
+  - `index_target_project`
+  - `query_codebase`
+- Phase 3 UI:
+  - Index Project action
+  - Semantic Query action
+  - Ranked semantic chunk results
 
 ## Run
 

@@ -307,6 +307,27 @@ body {
   cursor: pointer;
 }
 
+.semantic-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+}
+
+.semantic-toolbar button {
+  border: 0;
+  border-radius: 0.6rem;
+  padding: 0.68rem 0.9rem;
+  font-weight: 700;
+  color: var(--color-primary-foreground);
+  background: linear-gradient(
+    135deg,
+    color-mix(in oklch, var(--color-primary) 83%, black 10%),
+    color-mix(in oklch, var(--color-primary) 65%, var(--warning) 16%)
+  );
+  cursor: pointer;
+}
+
 .browser-grid {
   display: grid;
   grid-template-columns: minmax(220px, 320px) minmax(0, 1fr) minmax(220px, 300px);
@@ -403,6 +424,19 @@ body {
   display: flex;
   justify-content: space-between;
   gap: 0.5rem;
+}
+
+.search-divider {
+  height: 1px;
+  background: var(--color-border);
+  margin: 0.35rem 0.5rem;
+}
+
+.chunk-preview {
+  margin: 0.32rem 0.2rem 0;
+  font-size: 0.78rem;
+  color: var(--color-muted-foreground);
+  line-height: 1.3;
 }
 
 @media (max-width: 900px) {

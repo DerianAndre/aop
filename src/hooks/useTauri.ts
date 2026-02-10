@@ -2,8 +2,12 @@ import { invoke } from '@tauri-apps/api/core'
 
 import type {
   CreateTaskInput,
+  ContextChunk,
   DirectoryListing,
+  IndexProjectResult,
+  IndexTargetProjectInput,
   ListTargetDirInput,
+  QueryCodebaseInput,
   ReadTargetFileInput,
   SearchResult,
   SearchTargetFilesInput,
@@ -38,4 +42,12 @@ export async function readTargetFile(input: ReadTargetFileInput): Promise<Target
 
 export async function searchTargetFiles(input: SearchTargetFilesInput): Promise<SearchResult> {
   return invoke<SearchResult>('search_target_files', { input })
+}
+
+export async function indexTargetProject(input: IndexTargetProjectInput): Promise<IndexProjectResult> {
+  return invoke<IndexProjectResult>('index_target_project', { input })
+}
+
+export async function queryCodebase(input: QueryCodebaseInput): Promise<ContextChunk[]> {
+  return invoke<ContextChunk[]>('query_codebase', { input })
 }

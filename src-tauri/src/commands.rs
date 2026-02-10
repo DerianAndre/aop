@@ -5,6 +5,9 @@ use crate::mcp_bridge::tool_caller::{
     self, DirectoryListing, ListTargetDirInput, ReadTargetFileInput, SearchResult,
     SearchTargetFilesInput, TargetFileContent,
 };
+use crate::vector::indexer;
+use crate::vector::search;
+use crate::vector::{ContextChunk, IndexProjectInput, IndexProjectResult, QueryCodebaseInput};
 use crate::AppState;
 
 #[tauri::command]
@@ -57,4 +60,26 @@ pub async fn search_target_files(
     input: SearchTargetFilesInput,
 ) -> Result<SearchResult, String> {
     tool_caller::search_files(&state.bridge_client, input).await
+}
+
+#[tauri::command]
+pub async fn index_target_project(
+    state: State<'_, AppState>,
+    input: IndexProjectInput,
+) -> Result<IndexProjectResult, String> {
+    indexer::index_project(&state.db_pool, &input.target_project).await
+}
+
+#[tauri::command]
+pub async fn query_codebase(
+    state: State<'_, AppState>,
+    input: QueryCodebaseInput,
+) -> Result<Vec<ContextChunk>, String> {
+    search::query_codebase(
+        &state.db_pool,
+        &input.target_project,
+        &input.query,
+        input.top_k.unwrap_or(5),
+    )
+    .await
 }

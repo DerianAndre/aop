@@ -94,3 +94,32 @@ export interface SearchResult {
   source: 'local' | 'mcp' | 'mcp_fallback_local'
   warnings: string[]
 }
+
+export interface IndexTargetProjectInput {
+  targetProject: string
+}
+
+export interface IndexProjectResult {
+  targetProject: string
+  tableName: string
+  indexedFiles: number
+  indexedChunks: number
+  indexPath: string
+}
+
+export interface QueryCodebaseInput {
+  targetProject: string
+  query: string
+  topK?: number
+}
+
+export interface ContextChunk {
+  id: string
+  filePath: string
+  startLine: number
+  endLine: number
+  chunkType: string
+  name: string
+  content: string
+  score: number
+}
