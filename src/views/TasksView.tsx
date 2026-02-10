@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Plus } from 'lucide-react'
@@ -7,7 +7,8 @@ import { getTasks } from '@/hooks/useTauri'
 import TaskGraph from '@/components/TaskGraph'
 
 export function TasksView() {
-  const tasks = useAopStore((state) => Array.from(state.tasks.values()))
+  const tasksMap = useAopStore((state) => state.tasks)
+  const tasks = useMemo(() => Array.from(tasksMap.values()), [tasksMap])
   const selectedTaskId = useAopStore((state) => state.selectedTaskId)
   const selectTask = useAopStore((state) => state.selectTask)
 
