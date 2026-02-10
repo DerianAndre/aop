@@ -268,8 +268,8 @@ export interface ModelProfile {
 export interface ModelRoutingConfig {
   version: number
   defaultProvider: string
-  tiers: Record<string, ModelProfile>
-  personaOverrides: Record<string, ModelProfile>
+  tiers: Record<string, ModelProfile[]>
+  personaOverrides: Record<string, ModelProfile[]>
 }
 
 export interface ModelRegistrySnapshot {

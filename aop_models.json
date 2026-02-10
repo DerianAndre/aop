@@ -1,28 +1,54 @@
 {
-  "version": 1,
-  "defaultProvider": "openai",
+  "version": 2,
+  "defaultProvider": "claude_code",
   "tiers": {
-    "1": {
-      "provider": "openai",
-      "modelId": "gpt-5"
-    },
-    "2": {
-      "provider": "openai",
-      "modelId": "gpt-5-mini"
-    },
-    "3": {
-      "provider": "openai",
-      "modelId": "gpt-5-nano"
-    }
+    "1": [
+      {
+        "provider": "openai",
+        "modelId": "gpt-5"
+      },
+      {
+        "provider": "claude_code",
+        "modelId": "sonnet"
+      }
+    ],
+    "2": [
+      {
+        "provider": "openai",
+        "modelId": "gpt-5-mini"
+      },
+      {
+        "provider": "claude_code",
+        "modelId": "sonnet"
+      }
+    ],
+    "3": [
+      {
+        "provider": "openai",
+        "modelId": "gpt-5-nano"
+      },
+      {
+        "provider": "claude_code",
+        "modelId": "sonnet"
+      }
+    ]
   },
   "personaOverrides": {
-    "security_analyst": {
-      "provider": "openai",
-      "modelId": "o3"
-    },
-    "revision_specialist": {
-      "provider": "openai",
-      "modelId": "gpt-5-mini"
-    }
+    "security_analyst": [
+      {
+        "provider": "openai",
+        "modelId": "o3"
+      },
+      {
+        "provider": "claude_code",
+        "modelId": "opus"
+      }
+    ],
+    "revision_specialist": [
+      {
+        "provider": "claude_code",
+        "modelId": "sonnet"
+      }
+    ]
   }
 }

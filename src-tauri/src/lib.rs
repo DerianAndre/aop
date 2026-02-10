@@ -1,6 +1,7 @@
 mod agents;
 mod commands;
 mod db;
+mod llm_adapter;
 mod mcp_bridge;
 mod model_registry;
 mod mutation_pipeline;

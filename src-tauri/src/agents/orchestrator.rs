@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
 use crate::db::tasks::{self, CreateTaskRecordInput, TaskRecord, TaskStatus};
+use crate::llm_adapter;
 use crate::model_registry::ModelRegistry;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -54,7 +55,11 @@ pub async fn orchestrate_and_persist(
 ) -> Result<OrchestrationResult, String> {
     validate_objective_input(&input)?;
 
-    let tier1_model = model_registry.resolve(1, None)?;
+    let tier1_model = model_registry.resolve_with_supported_providers(
+        1,
+        None,
+        &llm_adapter::supported_provider_aliases(),
+    )?;
     let objective = input.objective.trim().to_string();
     let domain = infer_primary_domain(&objective);
     let assignment_count = desired_assignment_count(&objective);

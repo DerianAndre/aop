@@ -8,6 +8,7 @@ use crate::db::mutations::{
     self, CreateMutationInput, MutationRecord, MutationStatus, UpdateMutationStatusInput,
 };
 use crate::db::tasks::{self, CreateTaskRecordInput, TaskRecord, TaskStatus};
+use crate::llm_adapter;
 use crate::model_registry::ModelRegistry;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -62,7 +63,11 @@ pub async fn request_mutation_revision(
     )
     .await?;
 
-    let revision_model = model_registry.resolve(3, Some("revision_specialist"))?;
+    let revision_model = model_registry.resolve_with_supported_providers(
+        3,
+        Some("revision_specialist"),
+        &llm_adapter::supported_provider_aliases(),
+    )?;
     let specialist_task = SpecialistTask {
         task_id: revised_task.id.clone(),
         parent_id: parent_task.id.clone(),

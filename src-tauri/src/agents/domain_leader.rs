@@ -9,6 +9,7 @@ use crate::agents::specialist::{self, DiffProposal, SpecialistTask};
 use crate::agents::CodeBlock;
 use crate::db::mutations::{self, CreateMutationInput};
 use crate::db::tasks::{self, CreateTaskRecordInput, TaskStatus, UpdateTaskStatusInput};
+use crate::llm_adapter;
 use crate::mcp_bridge::client::BridgeClient;
 use crate::mcp_bridge::tool_caller::{self, ReadTargetFileInput, SearchTargetFilesInput};
 use crate::model_registry::ModelRegistry;
@@ -55,7 +56,11 @@ pub async fn execute_domain_task(
     input: ExecuteDomainTaskInput,
 ) -> Result<IntentSummary, String> {
     validate_input(&input)?;
-    let tier2_model = model_registry.resolve(2, None)?;
+    let tier2_model = model_registry.resolve_with_supported_providers(
+        2,
+        None,
+        &llm_adapter::supported_provider_aliases(),
+    )?;
     let task = tasks::get_task_by_id(pool, input.task_id.trim()).await?;
 
     if task.tier != 2 {
@@ -101,7 +106,11 @@ pub async fn execute_domain_task(
     for (idx, persona) in personas.iter().enumerate() {
         let specialist_objective =
             build_specialist_objective(&task.domain, &task.objective, persona.as_str(), idx);
-        let specialist_model = model_registry.resolve(3, Some(persona.as_str()))?;
+        let specialist_model = model_registry.resolve_with_supported_providers(
+            3,
+            Some(persona.as_str()),
+            &llm_adapter::supported_provider_aliases(),
+        )?;
         let target_file = candidate_files
             .get(if candidate_files.is_empty() {
                 0

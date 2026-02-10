@@ -144,3 +144,4 @@ src-tauri/gen/
 src-tauri/aop_orchestrator.db
 mcp-bridge/dist/
 
+.aidd/
