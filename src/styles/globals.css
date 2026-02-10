@@ -22,6 +22,7 @@
 }
 
 @theme inline {
+  /* Existing AOP colors */
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -32,6 +33,18 @@
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
   --color-ring: var(--ring);
+
+  /* shadcn compatible aliases */
+  --color-destructive: var(--danger);
+  --color-destructive-foreground: var(--primary-foreground);
+  --color-accent: var(--muted);
+  --color-accent-foreground: var(--muted-foreground);
+  --color-popover: var(--card);
+  --color-popover-foreground: var(--card-foreground);
+  --color-secondary: var(--muted);
+  --color-secondary-foreground: var(--muted-foreground);
+
+  /* Border radius */
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
