@@ -1,64 +1,125 @@
 # Autonomous Orchestration Platform (AOP)
 
-Phases 1-3 foundation for a Tauri v2 desktop app with React frontend, SQLite backend, MCP bridge, and semantic indexing.
+AOP is a desktop app (Tauri + React + Rust) to orchestrate code tasks, analyze codebases, generate mutation proposals, validate them, and apply changes with traceability.
 
-## What Is Implemented
+This README is DX-focused: quick setup, key commands, and how to use the capabilities.
 
-- Tauri v2 app scaffold (`src-tauri`) wired to React frontend.
-- SQLite initialization + migrations on startup.
-- Full Section 10 schema migration at `src-tauri/migrations/001_initial.sql`.
-- Rust commands:
-  - `create_task`
-  - `get_tasks`
-  - `update_task_status`
-- Phase 1 UI:
-  - Task creation form
-  - Persisted task list with status badges
-- Phase 2 bridge package at `mcp-bridge/` with:
-  - `list_dir`
-  - `read_file`
-  - `search_files`
-  - Optional MCP stdio passthrough (`mcpCommand` + `mcpArgs`)
-- New Tauri commands:
-  - `get_default_target_project`
-  - `list_target_dir`
-  - `read_target_file`
-  - `search_target_files`
-- Phase 2 UI:
-  - Target project path input
-  - Directory browser
-  - File preview
-  - Search panel
-- Phase 3 semantic engine:
-  - Target project indexing into `aop_vector_chunks` (SQLite-backed embeddings)
-  - Natural-language retrieval over indexed chunks
-- New Tauri commands:
-  - `index_target_project`
-  - `query_codebase`
-- Phase 3 UI:
-  - Index Project action
-  - Semantic Query action
-  - Ranked semantic chunk results
+## Quick Start
 
-## Run
+### 1) Prerequisites
+
+- Node.js 20+
+- `pnpm` 10+
+- Rust toolchain (stable)
+- Tauri system requirements for your OS
+
+### 2) Install
 
 ```bash
 pnpm install
+```
+
+### 3) Run in Dev
+
+```bash
 pnpm tauri dev
 ```
 
-## Validate
+## Core Commands
 
 ```bash
 pnpm lint
 pnpm test
 pnpm bridge:test
 pnpm build
-cd src-tauri && cargo test
+pnpm bridge:build
+cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-## Build Installers
+Build desktop bundle:
 
 ```bash
 pnpm tauri build
 ```
+
+## What You Can Do
+
+### Task Orchestration
+
+- Create tasks and track status in SQLite.
+- Run Tier 1 orchestration to split an objective into Tier 2 tasks.
+- Execute Tier 2 tasks to spawn Tier 3 specialists and generate mutation proposals.
+
+### Diff / Mutation Pipeline
+
+- Review proposed mutations.
+- Approve/reject/request revision from UI.
+- Run validation pipeline before apply.
+- Persist full audit trail.
+
+### Target Codebase Access
+
+- Browse target directories/files.
+- Search files by pattern.
+- Use local tool fallback when MCP call fails.
+
+### Semantic Engine
+
+- Index target project source chunks.
+- Query codebase with natural language.
+- Hydrate Tier 2/Tier 3 context from semantic chunks.
+
+### Model Routing (Multi-Provider)
+
+- Configure models in `aop_models.json`.
+- Each tier/persona can define multiple candidate providers/models.
+- Runtime selects the first candidate with an available adapter.
+- Current adapter implemented: `claude_code`.
+
+## Model Config (`aop_models.json`)
+
+`aop_models.json` supports:
+
+- `tiers`: tier default candidates (`1`, `2`, `3`)
+- `personaOverrides`: persona-specific candidates
+- each value can be one profile or an array of profiles
+
+Example shape:
+
+```json
+{
+  "version": 2,
+  "defaultProvider": "claude_code",
+  "tiers": {
+    "3": [
+      { "provider": "openai", "modelId": "gpt-5-nano" },
+      { "provider": "claude_code", "modelId": "sonnet" }
+    ]
+  },
+  "personaOverrides": {
+    "security_analyst": [
+      { "provider": "openai", "modelId": "o3" },
+      { "provider": "claude_code", "modelId": "opus" }
+    ]
+  }
+}
+```
+
+## Environment Variables
+
+- `AOP_MODEL_CONFIG_PATH`: override path to model config JSON.
+- `AOP_MODEL_ADAPTER_ENABLED`: enable/disable remote model adapter.
+  - default: enabled in runtime, disabled in tests.
+- `AOP_MODEL_ADAPTER_STRICT`: fail hard if adapter call fails.
+- `AOP_CLAUDE_MAX_BUDGET_USD`: optional per-call budget for Claude Code CLI.
+- `AOP_WORKSPACE_ROOT`: optional workspace root override for bridge resolution.
+
+## Project Docs
+
+- Main system spec: `docs/system.md`
+- MCP + semantic infra spec: `docs/system_mcp.md`
+- UI planning docs: `docs/plan/ui/`
+- Additional architecture docs:
+  - `ARCHITECTURE.md`
+  - `DIAGRAM.md`
+  - `AI.md`
