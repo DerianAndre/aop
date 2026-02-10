@@ -7,23 +7,28 @@ import {
   getDefaultTargetProject,
   getTasks,
   indexTargetProject,
+  listAuditLog,
   listTargetDir,
   listTaskMutations,
   orchestrateObjective,
   queryCodebase,
   readTargetFile,
+  runMutationPipeline,
   searchTargetFiles,
 } from '@/hooks/useTauri'
 import { cn } from '@/lib/utils'
 import type {
+  AuditLogEntry,
   ContextChunk,
   CreateTaskInput,
   DirectoryEntry,
   DirectoryListing,
   IndexProjectResult,
   IntentSummary,
+  MutationPipelineResult,
   MutationRecord,
   OrchestrationResult,
+  PipelineStepResult,
   SearchResult,
   TargetFileContent,
   TaskAssignment,
@@ -76,6 +81,13 @@ function assignmentRiskLabel(assignment: TaskAssignment): string {
   return 'Low'
 }
 
+function mutationStatusClass(status: string): string {
+  if (status === 'applied') return 'status-completed'
+  if (status === 'validated' || status === 'validated_no_tests') return 'status-executing'
+  if (status === 'rejected') return 'status-failed'
+  return 'status-pending'
+}
+
 function App() {
   const [tasks, setTasks] = useState<TaskRecord[]>([])
   const [formState, setFormState] = useState<CreateTaskInput>(DEFAULT_FORM)
@@ -93,6 +105,12 @@ function App() {
   const [tier2Mutations, setTier2Mutations] = useState<MutationRecord[]>([])
   const [tier2Feedback, setTier2Feedback] = useState<string | null>(null)
   const [activeTier2TaskId, setActiveTier2TaskId] = useState<string | null>(null)
+  const [isRunningPipeline, setIsRunningPipeline] = useState(false)
+  const [activeMutationId, setActiveMutationId] = useState<string | null>(null)
+  const [pipelineFeedback, setPipelineFeedback] = useState<string | null>(null)
+  const [pipelineResult, setPipelineResult] = useState<MutationPipelineResult | null>(null)
+  const [pipelineSteps, setPipelineSteps] = useState<PipelineStepResult[]>([])
+  const [auditEntries, setAuditEntries] = useState<AuditLogEntry[]>([])
 
   const [targetProject, setTargetProject] = useState('')
   const [mcpCommand, setMcpCommand] = useState('')
@@ -234,12 +252,51 @@ function App() {
       const mutations = await listTaskMutations({ taskId })
       setTier2Summary(summary)
       setTier2Mutations(mutations)
+      setPipelineResult(null)
+      setPipelineSteps([])
+      setAuditEntries([])
       await loadTasks()
     } catch (error) {
       setTier2Feedback(error instanceof Error ? error.message : String(error))
     } finally {
       setIsExecutingTier2(false)
       setActiveTier2TaskId(null)
+    }
+  }
+
+  async function handleRunMutationPipeline(mutationId: string, tier1Approved: boolean): Promise<void> {
+    const target = targetProject.trim()
+    if (!target) {
+      setPipelineFeedback('Target project path is required before running mutation pipeline.')
+      return
+    }
+
+    setIsRunningPipeline(true)
+    setActiveMutationId(mutationId)
+    setPipelineFeedback(null)
+
+    try {
+      const result = await runMutationPipeline({
+        mutationId,
+        targetProject: target,
+        tier1Approved,
+      })
+
+      setPipelineResult(result)
+      setPipelineSteps(result.steps)
+      const audit = await listAuditLog({ targetId: mutationId, limit: 50 })
+      setAuditEntries(audit)
+
+      if (tier2Summary) {
+        const mutations = await listTaskMutations({ taskId: tier2Summary.taskId })
+        setTier2Mutations(mutations)
+      }
+      await loadTasks()
+    } catch (error) {
+      setPipelineFeedback(error instanceof Error ? error.message : String(error))
+    } finally {
+      setIsRunningPipeline(false)
+      setActiveMutationId(null)
     }
   }
 
@@ -413,7 +470,7 @@ function App() {
         <div>
           <h1 className="app-title">Autonomous Orchestration Platform</h1>
           <p className="app-subtitle">
-            Phase 5 adds Tier 2 orchestration and Tier 3 specialist diff proposals with attribution.
+            Phase 6 adds validated mutation pipeline with shadow testing, semantic checks, and atomic apply.
           </p>
         </div>
         <strong>{taskCountLabel}</strong>
@@ -670,6 +727,85 @@ function App() {
               </ul>
 
               <p className="meta-inline">Persisted mutations: {tier2Mutations.length}</p>
+              <ul className="orchestration-list">
+                {tier2Mutations.map((mutation) => (
+                  <li className="orchestration-item" key={mutation.id}>
+                    <div className="task-row">
+                      <span className="task-domain">{mutation.filePath}</span>
+                      <span className={cn('status-pill', mutationStatusClass(mutation.status))}>
+                        {mutation.status}
+                      </span>
+                    </div>
+                    <div className="task-meta">
+                      <span>Mutation {mutation.id.slice(0, 8)}</span>
+                      <span>Confidence {mutation.confidence.toFixed(2)}</span>
+                    </div>
+                    <div className="mutation-actions">
+                      <button
+                        className="tier2-run-button"
+                        type="button"
+                        disabled={isRunningPipeline && activeMutationId === mutation.id}
+                        onClick={() => void handleRunMutationPipeline(mutation.id, false)}
+                      >
+                        {isRunningPipeline && activeMutationId === mutation.id
+                          ? 'Running Pipeline...'
+                          : 'Validate Only'}
+                      </button>
+                      <button
+                        className="tier2-run-button"
+                        type="button"
+                        disabled={isRunningPipeline && activeMutationId === mutation.id}
+                        onClick={() => void handleRunMutationPipeline(mutation.id, true)}
+                      >
+                        {isRunningPipeline && activeMutationId === mutation.id
+                          ? 'Running Pipeline...'
+                          : 'Validate + Apply'}
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          {pipelineFeedback ? <p className="feedback">{pipelineFeedback}</p> : null}
+
+          {pipelineResult ? (
+            <div className="orchestration-result">
+              <div className="task-meta">
+                <span>Pipeline Task {pipelineResult.task.id}</span>
+                <span>Mutation {pipelineResult.mutation.id.slice(0, 8)}</span>
+                <span>Status {pipelineResult.mutation.status}</span>
+                {pipelineResult.shadowDir ? <span>Shadow {pipelineResult.shadowDir}</span> : null}
+              </div>
+
+              <ul className="orchestration-list">
+                {pipelineSteps.map((step) => (
+                  <li className="orchestration-item" key={step.step}>
+                    <div className="task-row">
+                      <span className="task-domain">{step.step}</span>
+                      <span className={cn('status-pill', mutationStatusClass(step.status === 'failed' ? 'rejected' : 'validated'))}>
+                        {step.status}
+                      </span>
+                    </div>
+                    <p className="task-objective">{step.details}</p>
+                  </li>
+                ))}
+              </ul>
+
+              <div className="search-divider" />
+              <p className="meta-inline">Audit Trail ({auditEntries.length})</p>
+              <ul className="search-list">
+                {auditEntries.map((entry) => (
+                  <li key={entry.id}>
+                    <div className="task-row">
+                      <span className="task-domain">{entry.action}</span>
+                      <span className="meta-inline">{formatTimestamp(entry.timestamp)}</span>
+                    </div>
+                    {entry.details ? <p className="chunk-preview">{entry.details}</p> : null}
+                  </li>
+                ))}
+              </ul>
             </div>
           ) : null}
         </div>

@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 
 import type {
+  AuditLogEntry,
   CreateTaskInput,
   ContextChunk,
   DirectoryListing,
@@ -8,12 +9,15 @@ import type {
   IndexProjectResult,
   IndexTargetProjectInput,
   IntentSummary,
+  ListAuditLogInput,
   ListTargetDirInput,
   ListTaskMutationsInput,
+  MutationPipelineResult,
   MutationRecord,
   OrchestrationResult,
   QueryCodebaseInput,
   ReadTargetFileInput,
+  RunMutationPipelineInput,
   SearchResult,
   SearchTargetFilesInput,
   TargetFileContent,
@@ -44,6 +48,14 @@ export async function executeDomainTask(input: ExecuteDomainTaskInput): Promise<
 
 export async function listTaskMutations(input: ListTaskMutationsInput): Promise<MutationRecord[]> {
   return invoke<MutationRecord[]>('list_task_mutations', { input })
+}
+
+export async function runMutationPipeline(input: RunMutationPipelineInput): Promise<MutationPipelineResult> {
+  return invoke<MutationPipelineResult>('run_mutation_pipeline', { input })
+}
+
+export async function listAuditLog(input: ListAuditLogInput): Promise<AuditLogEntry[]> {
+  return invoke<AuditLogEntry[]>('list_audit_log', { input })
 }
 
 export async function getDefaultTargetProject(): Promise<string> {

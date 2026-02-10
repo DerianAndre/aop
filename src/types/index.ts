@@ -116,6 +116,41 @@ export interface MutationRecord {
   appliedAt: number | null
 }
 
+export interface RunMutationPipelineInput {
+  mutationId: string
+  targetProject: string
+  tier1Approved: boolean
+  ciCommand?: string
+  ciArgs?: string[]
+}
+
+export interface PipelineStepResult {
+  step: string
+  status: string
+  details: string
+}
+
+export interface MutationPipelineResult {
+  mutation: MutationRecord
+  task: TaskRecord
+  steps: PipelineStepResult[]
+  shadowDir: string | null
+}
+
+export interface AuditLogEntry {
+  id: number
+  timestamp: number
+  actor: string
+  action: string
+  targetId: string | null
+  details: string | null
+}
+
+export interface ListAuditLogInput {
+  targetId?: string
+  limit?: number
+}
+
 export interface UpdateTaskStatusInput {
   taskId: string
   status: TaskStatus

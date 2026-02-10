@@ -76,6 +76,18 @@ pub struct UpdateTaskStatusInput {
     pub error_message: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct UpdateTaskOutcomeInput {
+    pub task_id: String,
+    pub status: TaskStatus,
+    pub token_usage: Option<i64>,
+    pub context_efficiency_ratio: Option<f64>,
+    pub compliance_score: Option<i64>,
+    pub checksum_before: Option<String>,
+    pub checksum_after: Option<String>,
+    pub error_message: Option<String>,
+}
+
 pub async fn create_task(pool: &SqlitePool, input: CreateTaskInput) -> Result<TaskRecord, String> {
     create_task_record(
         pool,
@@ -178,6 +190,49 @@ pub async fn update_task_status(
     if rows_affected == 0 {
         return Err(format!("Task '{}' not found", input.task_id));
     }
+
+    get_task_by_id(pool, input.task_id.trim()).await
+}
+
+pub async fn update_task_outcome(
+    pool: &SqlitePool,
+    input: UpdateTaskOutcomeInput,
+) -> Result<TaskRecord, String> {
+    if input.task_id.trim().is_empty() {
+        return Err("taskId is required".to_string());
+    }
+
+    let current = get_task_by_id(pool, input.task_id.trim()).await?;
+    let token_usage = input.token_usage.unwrap_or(current.token_usage);
+    let context_efficiency_ratio = input
+        .context_efficiency_ratio
+        .unwrap_or(current.context_efficiency_ratio);
+    let compliance_score = input.compliance_score.unwrap_or(current.compliance_score);
+    let checksum_before = input.checksum_before.or(current.checksum_before);
+    let checksum_after = input.checksum_after.or(current.checksum_after);
+    let error_message = input.error_message.or(current.error_message);
+
+    let now = Utc::now().timestamp();
+    sqlx::query(
+        r#"
+        UPDATE aop_tasks
+        SET status = ?, token_usage = ?, context_efficiency_ratio = ?, compliance_score = ?,
+            checksum_before = ?, checksum_after = ?, error_message = ?, updated_at = ?
+        WHERE id = ?
+        "#,
+    )
+    .bind(input.status.as_str())
+    .bind(token_usage)
+    .bind(context_efficiency_ratio)
+    .bind(compliance_score)
+    .bind(checksum_before)
+    .bind(checksum_after)
+    .bind(error_message)
+    .bind(now)
+    .bind(input.task_id.trim())
+    .execute(pool)
+    .await
+    .map_err(|error| format!("Failed to update task outcome: {error}"))?;
 
     get_task_by_id(pool, input.task_id.trim()).await
 }
@@ -297,5 +352,45 @@ mod tests {
         .await;
 
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn update_task_outcome_sets_checksums_and_compliance() {
+        let pool = setup_test_pool().await;
+
+        let created = create_task(
+            &pool,
+            CreateTaskInput {
+                parent_id: None,
+                tier: 2,
+                domain: "auth".to_string(),
+                objective: "Validate mutation pipeline".to_string(),
+                token_budget: 3200,
+            },
+        )
+        .await
+        .expect("task should be created");
+
+        let updated = update_task_outcome(
+            &pool,
+            UpdateTaskOutcomeInput {
+                task_id: created.id.clone(),
+                status: TaskStatus::Completed,
+                token_usage: Some(1550),
+                context_efficiency_ratio: Some(1.2),
+                compliance_score: Some(82),
+                checksum_before: Some("before_hash".to_string()),
+                checksum_after: Some("after_hash".to_string()),
+                error_message: None,
+            },
+        )
+        .await
+        .expect("task outcome should update");
+
+        assert_eq!(updated.status, "completed");
+        assert_eq!(updated.token_usage, 1550);
+        assert_eq!(updated.compliance_score, 82);
+        assert_eq!(updated.checksum_before.as_deref(), Some("before_hash"));
+        assert_eq!(updated.checksum_after.as_deref(), Some("after_hash"));
     }
 }

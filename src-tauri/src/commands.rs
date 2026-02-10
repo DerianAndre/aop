@@ -2,12 +2,14 @@ use tauri::State;
 
 use crate::agents::domain_leader::{self, ExecuteDomainTaskInput, IntentSummary};
 use crate::agents::orchestrator::{self, OrchestrationResult, UserObjectiveInput};
+use crate::db::metrics::{self, AuditLogEntry, ListAuditLogInput};
 use crate::db::mutations::{self, ListTaskMutationsInput, MutationRecord};
 use crate::db::tasks::{self, CreateTaskInput, TaskRecord, UpdateTaskStatusInput};
 use crate::mcp_bridge::tool_caller::{
     self, DirectoryListing, ListTargetDirInput, ReadTargetFileInput, SearchResult,
     SearchTargetFilesInput, TargetFileContent,
 };
+use crate::mutation_pipeline::{self, MutationPipelineResult, RunMutationPipelineInput};
 use crate::vector::indexer;
 use crate::vector::search;
 use crate::vector::{ContextChunk, IndexProjectInput, IndexProjectResult, QueryCodebaseInput};
@@ -56,6 +58,22 @@ pub async fn list_task_mutations(
     input: ListTaskMutationsInput,
 ) -> Result<Vec<MutationRecord>, String> {
     mutations::list_mutations_for_task(&state.db_pool, input).await
+}
+
+#[tauri::command]
+pub async fn run_mutation_pipeline(
+    state: State<'_, AppState>,
+    input: RunMutationPipelineInput,
+) -> Result<MutationPipelineResult, String> {
+    mutation_pipeline::run_mutation_pipeline(&state.db_pool, input).await
+}
+
+#[tauri::command]
+pub async fn list_audit_log(
+    state: State<'_, AppState>,
+    input: ListAuditLogInput,
+) -> Result<Vec<AuditLogEntry>, String> {
+    metrics::list_audit_log(&state.db_pool, input).await
 }
 
 #[tauri::command]

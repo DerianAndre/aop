@@ -262,6 +262,13 @@ body {
   cursor: not-allowed;
 }
 
+.mutation-actions {
+  margin-top: 0.6rem;
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
 .status-pill {
   display: inline-flex;
   align-items: center;

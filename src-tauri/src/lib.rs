@@ -2,6 +2,7 @@ mod agents;
 mod commands;
 mod db;
 mod mcp_bridge;
+mod mutation_pipeline;
 mod vector;
 
 use std::fs;
@@ -59,6 +60,8 @@ pub fn run() {
             commands::orchestrate_objective,
             commands::execute_domain_task,
             commands::list_task_mutations,
+            commands::run_mutation_pipeline,
+            commands::list_audit_log,
             commands::get_default_target_project,
             commands::list_target_dir,
             commands::read_target_file,
