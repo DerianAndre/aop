@@ -1,5 +1,6 @@
 use tauri::State;
 
+use crate::agents::orchestrator::{self, OrchestrationResult, UserObjectiveInput};
 use crate::db::tasks::{self, CreateTaskInput, TaskRecord, UpdateTaskStatusInput};
 use crate::mcp_bridge::tool_caller::{
     self, DirectoryListing, ListTargetDirInput, ReadTargetFileInput, SearchResult,
@@ -29,6 +30,14 @@ pub async fn update_task_status(
     input: UpdateTaskStatusInput,
 ) -> Result<TaskRecord, String> {
     tasks::update_task_status(&state.db_pool, input).await
+}
+
+#[tauri::command]
+pub async fn orchestrate_objective(
+    state: State<'_, AppState>,
+    input: UserObjectiveInput,
+) -> Result<OrchestrationResult, String> {
+    orchestrator::orchestrate_and_persist(&state.db_pool, input).await
 }
 
 #[tauri::command]

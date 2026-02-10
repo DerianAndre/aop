@@ -178,6 +178,27 @@ body {
   color: var(--danger);
 }
 
+.orchestration-result {
+  margin-top: 0.85rem;
+  display: grid;
+  gap: 0.55rem;
+}
+
+.orchestration-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.55rem;
+}
+
+.orchestration-item {
+  border: 1px solid var(--color-border);
+  border-radius: 0.65rem;
+  padding: 0.75rem 0.8rem;
+  background: color-mix(in oklch, var(--color-card) 92%, transparent);
+}
+
 .task-list {
   margin: 0;
   padding: 0;

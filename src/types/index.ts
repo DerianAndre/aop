@@ -28,6 +28,33 @@ export interface CreateTaskInput {
   tokenBudget: number
 }
 
+export interface UserObjectiveInput {
+  objective: string
+  targetProject: string
+  globalTokenBudget: number
+  maxRiskTolerance: number
+}
+
+export interface TaskAssignment {
+  taskId: string
+  parentId: string
+  tier: 2
+  domain: string
+  objective: string
+  tokenBudget: number
+  riskFactor: number
+  constraints: string[]
+  relevantFiles: string[]
+}
+
+export interface OrchestrationResult {
+  rootTask: TaskRecord
+  assignments: TaskAssignment[]
+  overheadBudget: number
+  reserveBudget: number
+  distributedBudget: number
+}
+
 export interface UpdateTaskStatusInput {
   taskId: string
   status: TaskStatus

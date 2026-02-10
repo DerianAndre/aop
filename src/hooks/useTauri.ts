@@ -7,12 +7,14 @@ import type {
   IndexProjectResult,
   IndexTargetProjectInput,
   ListTargetDirInput,
+  OrchestrationResult,
   QueryCodebaseInput,
   ReadTargetFileInput,
   SearchResult,
   SearchTargetFilesInput,
   TargetFileContent,
   TaskRecord,
+  UserObjectiveInput,
   UpdateTaskStatusInput,
 } from '@/types'
 
@@ -26,6 +28,10 @@ export async function createTask(input: CreateTaskInput): Promise<TaskRecord> {
 
 export async function updateTaskStatus(input: UpdateTaskStatusInput): Promise<TaskRecord> {
   return invoke<TaskRecord>('update_task_status', { input })
+}
+
+export async function orchestrateObjective(input: UserObjectiveInput): Promise<OrchestrationResult> {
+  return invoke<OrchestrationResult>('orchestrate_objective', { input })
 }
 
 export async function getDefaultTargetProject(): Promise<string> {

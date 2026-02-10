@@ -14,7 +14,7 @@ pub enum TaskStatus {
 }
 
 impl TaskStatus {
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             TaskStatus::Pending => "pending",
             TaskStatus::Executing => "executing",
@@ -57,6 +57,17 @@ pub struct CreateTaskInput {
     pub token_budget: i64,
 }
 
+#[derive(Debug, Clone)]
+pub struct CreateTaskRecordInput {
+    pub parent_id: Option<String>,
+    pub tier: i64,
+    pub domain: String,
+    pub objective: String,
+    pub token_budget: i64,
+    pub risk_factor: f64,
+    pub status: TaskStatus,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateTaskStatusInput {
@@ -66,7 +77,26 @@ pub struct UpdateTaskStatusInput {
 }
 
 pub async fn create_task(pool: &SqlitePool, input: CreateTaskInput) -> Result<TaskRecord, String> {
-    validate_create_input(&input)?;
+    create_task_record(
+        pool,
+        CreateTaskRecordInput {
+            parent_id: input.parent_id,
+            tier: input.tier,
+            domain: input.domain,
+            objective: input.objective,
+            token_budget: input.token_budget,
+            risk_factor: 0.0,
+            status: TaskStatus::Pending,
+        },
+    )
+    .await
+}
+
+pub async fn create_task_record(
+    pool: &SqlitePool,
+    input: CreateTaskRecordInput,
+) -> Result<TaskRecord, String> {
+    validate_create_record_input(&input)?;
 
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().timestamp();
@@ -84,7 +114,7 @@ pub async fn create_task(pool: &SqlitePool, input: CreateTaskInput) -> Result<Ta
             compliance_score, checksum_before, checksum_after, error_message,
             retry_count, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0.0, 0.0, 0, NULL, NULL, NULL, 0, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0.0, ?, 0, NULL, NULL, NULL, 0, ?, ?)
         "#,
     )
     .bind(&id)
@@ -92,8 +122,9 @@ pub async fn create_task(pool: &SqlitePool, input: CreateTaskInput) -> Result<Ta
     .bind(input.tier)
     .bind(input.domain.trim())
     .bind(input.objective.trim())
-    .bind(TaskStatus::Pending.as_str())
+    .bind(input.status.as_str())
     .bind(input.token_budget)
+    .bind(input.risk_factor)
     .bind(now)
     .bind(now)
     .execute(pool)
@@ -169,7 +200,7 @@ async fn get_task_by_id(pool: &SqlitePool, task_id: &str) -> Result<TaskRecord, 
     .ok_or_else(|| format!("Task '{task_id}' not found"))
 }
 
-fn validate_create_input(input: &CreateTaskInput) -> Result<(), String> {
+fn validate_create_record_input(input: &CreateTaskRecordInput) -> Result<(), String> {
     if !(1..=3).contains(&input.tier) {
         return Err("tier must be 1, 2, or 3".to_string());
     }
@@ -181,6 +212,9 @@ fn validate_create_input(input: &CreateTaskInput) -> Result<(), String> {
     }
     if input.token_budget <= 0 {
         return Err("tokenBudget must be greater than 0".to_string());
+    }
+    if !(0.0..=1.0).contains(&input.risk_factor) {
+        return Err("riskFactor must be between 0.0 and 1.0".to_string());
     }
 
     Ok(())

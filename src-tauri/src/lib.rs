@@ -1,3 +1,4 @@
+mod agents;
 mod commands;
 mod db;
 mod mcp_bridge;
@@ -55,6 +56,7 @@ pub fn run() {
             commands::create_task,
             commands::get_tasks,
             commands::update_task_status,
+            commands::orchestrate_objective,
             commands::get_default_target_project,
             commands::list_target_dir,
             commands::read_target_file,

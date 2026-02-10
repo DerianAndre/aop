@@ -7,6 +7,7 @@ import {
   getTasks,
   indexTargetProject,
   listTargetDir,
+  orchestrateObjective,
   queryCodebase,
   readTargetFile,
   searchTargetFiles,
@@ -18,8 +19,10 @@ import type {
   DirectoryEntry,
   DirectoryListing,
   IndexProjectResult,
+  OrchestrationResult,
   SearchResult,
   TargetFileContent,
+  TaskAssignment,
   TaskRecord,
   TaskStatus,
 } from '@/types'
@@ -59,12 +62,28 @@ function entryIcon(entry: DirectoryEntry): string {
   return entry.isDir ? 'DIR' : 'FILE'
 }
 
+function assignmentRiskLabel(assignment: TaskAssignment): string {
+  if (assignment.riskFactor > 0.7) {
+    return 'High'
+  }
+  if (assignment.riskFactor >= 0.3) {
+    return 'Medium'
+  }
+  return 'Low'
+}
+
 function App() {
   const [tasks, setTasks] = useState<TaskRecord[]>([])
   const [formState, setFormState] = useState<CreateTaskInput>(DEFAULT_FORM)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isLoadingTasks, setIsLoadingTasks] = useState(true)
   const [taskFeedback, setTaskFeedback] = useState<string | null>(null)
+  const [orchestratorObjective, setOrchestratorObjective] = useState('')
+  const [orchestratorBudget, setOrchestratorBudget] = useState(12000)
+  const [orchestratorRiskTolerance, setOrchestratorRiskTolerance] = useState(0.6)
+  const [isOrchestrating, setIsOrchestrating] = useState(false)
+  const [orchestrationResult, setOrchestrationResult] = useState<OrchestrationResult | null>(null)
+  const [orchestratorFeedback, setOrchestratorFeedback] = useState<string | null>(null)
 
   const [targetProject, setTargetProject] = useState('')
   const [mcpCommand, setMcpCommand] = useState('')
@@ -138,6 +157,49 @@ function App() {
       setTaskFeedback(error instanceof Error ? error.message : String(error))
     } finally {
       setIsSubmitting(false)
+    }
+  }
+
+  async function handleOrchestrateSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setOrchestratorFeedback(null)
+
+    const objective = orchestratorObjective.trim()
+    const target = targetProject.trim()
+    if (!target) {
+      setOrchestratorFeedback('Target project path is required.')
+      return
+    }
+    if (!objective) {
+      setOrchestratorFeedback('Objective is required.')
+      return
+    }
+    if (!Number.isFinite(orchestratorBudget) || orchestratorBudget < 100) {
+      setOrchestratorFeedback('Global token budget must be at least 100.')
+      return
+    }
+    if (!Number.isFinite(orchestratorRiskTolerance) || orchestratorRiskTolerance < 0 || orchestratorRiskTolerance > 1) {
+      setOrchestratorFeedback('Max risk tolerance must be between 0.0 and 1.0.')
+      return
+    }
+
+    setIsOrchestrating(true)
+
+    try {
+      const result = await orchestrateObjective({
+        objective,
+        targetProject: target,
+        globalTokenBudget: Math.floor(orchestratorBudget),
+        maxRiskTolerance: Number(orchestratorRiskTolerance.toFixed(2)),
+      })
+
+      setOrchestrationResult(result)
+      setOrchestratorObjective('')
+      await loadTasks()
+    } catch (error) {
+      setOrchestratorFeedback(error instanceof Error ? error.message : String(error))
+    } finally {
+      setIsOrchestrating(false)
     }
   }
 
@@ -311,7 +373,7 @@ function App() {
         <div>
           <h1 className="app-title">Autonomous Orchestration Platform</h1>
           <p className="app-subtitle">
-            Phase 3 adds semantic indexing and natural-language retrieval for target codebases.
+            Phase 4 adds Tier 1 objective decomposition with PRA risk scoring and budget allocation.
           </p>
         </div>
         <strong>{taskCountLabel}</strong>
@@ -432,6 +494,83 @@ function App() {
             ) : null}
           </div>
         </article>
+      </section>
+
+      <section className="card browser-card">
+        <div className="card-header">
+          <h2 className="card-title">Tier 1 Orchestrator</h2>
+        </div>
+        <div className="card-content">
+          <form className="task-form" onSubmit={handleOrchestrateSubmit}>
+            <div className="field">
+              <label htmlFor="orchestrator-objective">Objective</label>
+              <textarea
+                id="orchestrator-objective"
+                value={orchestratorObjective}
+                onChange={(event) => setOrchestratorObjective(event.target.value)}
+                placeholder="Refactor auth module"
+              />
+            </div>
+
+            <div className="browser-inline-grid">
+              <div className="field">
+                <label htmlFor="orchestrator-budget">Global Token Budget</label>
+                <input
+                  id="orchestrator-budget"
+                  min={100}
+                  step={100}
+                  type="number"
+                  value={orchestratorBudget}
+                  onChange={(event) => setOrchestratorBudget(Number(event.target.value || 0))}
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="orchestrator-risk">Max Risk Tolerance (0.0 - 1.0)</label>
+                <input
+                  id="orchestrator-risk"
+                  max={1}
+                  min={0}
+                  step={0.05}
+                  type="number"
+                  value={orchestratorRiskTolerance}
+                  onChange={(event) => setOrchestratorRiskTolerance(Number(event.target.value || 0))}
+                />
+              </div>
+            </div>
+
+            <button disabled={isOrchestrating} type="submit">
+              {isOrchestrating ? 'Orchestrating...' : 'Decompose Objective'}
+            </button>
+          </form>
+
+          {orchestratorFeedback ? <p className="feedback">{orchestratorFeedback}</p> : null}
+
+          {orchestrationResult ? (
+            <div className="orchestration-result">
+              <p className="meta-inline">
+                Root task: {orchestrationResult.rootTask.id} | subtasks: {orchestrationResult.assignments.length} |
+                distributed budget: {orchestrationResult.distributedBudget}
+              </p>
+              <ul className="orchestration-list">
+                {orchestrationResult.assignments.map((assignment) => (
+                  <li className="orchestration-item" key={assignment.taskId}>
+                    <div className="task-row">
+                      <span className="task-domain">{assignment.domain}</span>
+                      <span className="meta-inline">
+                        risk {assignment.riskFactor.toFixed(2)} ({assignmentRiskLabel(assignment)})
+                      </span>
+                    </div>
+                    <p className="task-objective">{assignment.objective}</p>
+                    <div className="task-meta">
+                      <span>Budget {assignment.tokenBudget}</span>
+                      <span>{assignment.relevantFiles.length} relevant files</span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </div>
       </section>
 
       <section className="card browser-card">
