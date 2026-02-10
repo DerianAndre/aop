@@ -6,6 +6,7 @@ mod mcp_bridge;
 mod model_registry;
 mod mutation_pipeline;
 mod mutation_revision;
+mod task_runtime;
 mod vector;
 
 use std::fs;
@@ -64,6 +65,10 @@ pub fn run() {
             commands::create_task,
             commands::get_tasks,
             commands::update_task_status,
+            commands::control_task,
+            commands::request_task_budget_increase,
+            commands::list_task_budget_requests,
+            commands::resolve_task_budget_request,
             commands::orchestrate_objective,
             commands::execute_domain_task,
             commands::list_task_mutations,
@@ -71,6 +76,7 @@ pub fn run() {
             commands::set_mutation_status,
             commands::request_mutation_revision,
             commands::list_audit_log,
+            commands::list_task_activity,
             commands::get_default_target_project,
             commands::list_target_dir,
             commands::read_target_file,

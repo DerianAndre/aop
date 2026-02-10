@@ -8,6 +8,7 @@ use sqlx::SqlitePool;
 use crate::db::tasks::{self, CreateTaskRecordInput, TaskRecord, TaskStatus};
 use crate::llm_adapter;
 use crate::model_registry::ModelRegistry;
+use crate::task_runtime;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -90,6 +91,44 @@ pub async fn orchestrate_and_persist(
     )
     .await?;
 
+    tasks::update_task_status(
+        pool,
+        tasks::UpdateTaskStatusInput {
+            task_id: root_task.id.clone(),
+            status: TaskStatus::Executing,
+            error_message: None,
+        },
+    )
+    .await?;
+    task_runtime::record_task_activity(
+        pool,
+        "tier1_orchestrator",
+        "orchestration_started",
+        &root_task.id,
+        &format!(
+            "objective={} target={} model={}/{} budget={}",
+            objective,
+            input.target_project.trim(),
+            tier1_model.provider,
+            tier1_model.model_id,
+            input.global_token_budget
+        ),
+    )
+    .await?;
+    task_runtime::record_task_activity(
+        pool,
+        "tier1_orchestrator",
+        "orchestration_context_built",
+        &root_task.id,
+        &format!(
+            "assignmentCount={} candidateFiles={} distributedBudget={}",
+            drafts.len(),
+            all_candidate_files.len(),
+            distributed_budget
+        ),
+    )
+    .await?;
+
     let mut risk_weights = Vec::with_capacity(drafts.len());
     let mut per_draft_context: Vec<(Vec<String>, f32, Vec<String>)> =
         Vec::with_capacity(drafts.len());
@@ -116,6 +155,25 @@ pub async fn orchestrate_and_persist(
     let mut assignments = Vec::with_capacity(drafts.len());
 
     for (idx, draft) in drafts.iter().enumerate() {
+        if let Err(error) = task_runtime::cooperative_checkpoint(
+            pool,
+            &root_task.id,
+            "tier1_orchestrator",
+            &format!("assignment_{idx}_planning"),
+        )
+        .await
+        {
+            let _ = task_runtime::record_task_activity(
+                pool,
+                "tier1_orchestrator",
+                "orchestration_stopped",
+                &root_task.id,
+                &error,
+            )
+            .await;
+            return Err(error);
+        }
+
         let (relevant_files, risk_factor, constraints) = &per_draft_context[idx];
         let created = tasks::create_task_record(
             pool,
@@ -131,6 +189,23 @@ pub async fn orchestrate_and_persist(
         )
         .await?;
 
+        task_runtime::record_task_activity(
+            pool,
+            "tier1_orchestrator",
+            "tier2_assignment_created",
+            &created.id,
+            &format!(
+                "parent={} domain={} risk={:.3} tokenBudget={} files={} constraints={}",
+                root_task.id,
+                draft.domain,
+                risk_factor,
+                budgets[idx],
+                relevant_files.len(),
+                constraints.join(" | ")
+            ),
+        )
+        .await?;
+
         assignments.push(TaskAssignment {
             task_id: created.id,
             parent_id: root_task.id.clone(),
@@ -143,6 +218,28 @@ pub async fn orchestrate_and_persist(
             relevant_files: relevant_files.clone(),
         });
     }
+
+    tasks::update_task_status(
+        pool,
+        tasks::UpdateTaskStatusInput {
+            task_id: root_task.id.clone(),
+            status: TaskStatus::Completed,
+            error_message: None,
+        },
+    )
+    .await?;
+    task_runtime::record_task_activity(
+        pool,
+        "tier1_orchestrator",
+        "orchestration_completed",
+        &root_task.id,
+        &format!(
+            "assignments={} reserveBudget={}",
+            assignments.len(),
+            reserve_budget
+        ),
+    )
+    .await?;
 
     Ok(OrchestrationResult {
         root_task,

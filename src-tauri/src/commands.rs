@@ -2,11 +2,17 @@ use tauri::State;
 
 use crate::agents::domain_leader::{self, ExecuteDomainTaskInput, IntentSummary};
 use crate::agents::orchestrator::{self, OrchestrationResult, UserObjectiveInput};
-use crate::db::metrics::{self, AuditLogEntry, ListAuditLogInput};
+use crate::db::budget_requests::{
+    self, BudgetRequestRecord, CreateBudgetRequestInput, ListTaskBudgetRequestsInput,
+    ResolveBudgetRequestInput,
+};
+use crate::db::metrics::{self, AuditLogEntry, ListAuditLogInput, ListTaskActivityInput};
 use crate::db::mutations::{
     self, ListTaskMutationsInput, MutationRecord, UpdateMutationStatusInput,
 };
-use crate::db::tasks::{self, CreateTaskInput, TaskRecord, UpdateTaskStatusInput};
+use crate::db::tasks::{
+    self, ControlTaskInput, CreateTaskInput, TaskRecord, UpdateTaskStatusInput,
+};
 use crate::mcp_bridge::tool_caller::{
     self, DirectoryListing, ListTargetDirInput, ReadTargetFileInput, SearchResult,
     SearchTargetFilesInput, TargetFileContent,
@@ -38,6 +44,104 @@ pub async fn update_task_status(
     input: UpdateTaskStatusInput,
 ) -> Result<TaskRecord, String> {
     tasks::update_task_status(&state.db_pool, input).await
+}
+
+#[tauri::command]
+pub async fn control_task(
+    state: State<'_, AppState>,
+    input: ControlTaskInput,
+) -> Result<Vec<TaskRecord>, String> {
+    let action = input.action.as_str().to_string();
+    let task_id = input.task_id.clone();
+    let include_descendants = input.include_descendants.unwrap_or(true);
+    let updated = tasks::control_task(&state.db_pool, input).await?;
+
+    metrics::record_audit_event(
+        &state.db_pool,
+        "ui",
+        "task_control",
+        Some(task_id.as_str()),
+        Some(&format!(
+            "{{\"action\":\"{}\",\"updated\":{},\"cascade\":{}}}",
+            action,
+            updated.len(),
+            include_descendants
+        )),
+    )
+    .await?;
+
+    Ok(updated)
+}
+
+#[tauri::command]
+pub async fn request_task_budget_increase(
+    state: State<'_, AppState>,
+    input: CreateBudgetRequestInput,
+) -> Result<BudgetRequestRecord, String> {
+    let requested_increment = input.requested_increment;
+    let requested_by = input.requested_by.clone();
+    let auto_approve = input.auto_approve.unwrap_or(false);
+    let request = budget_requests::create_budget_request(&state.db_pool, input).await?;
+    let action = if request.status == "approved" {
+        "task_budget_auto_approved"
+    } else {
+        "task_budget_requested"
+    };
+
+    metrics::record_audit_event(
+        &state.db_pool,
+        requested_by.as_str(),
+        action,
+        Some(request.task_id.as_str()),
+        Some(&format!(
+            "{{\"requestId\":\"{}\",\"requestedIncrement\":{},\"status\":\"{}\",\"autoApprove\":{}}}",
+            request.id, requested_increment, request.status, auto_approve
+        )),
+    )
+    .await?;
+
+    Ok(request)
+}
+
+#[tauri::command]
+pub async fn list_task_budget_requests(
+    state: State<'_, AppState>,
+    input: ListTaskBudgetRequestsInput,
+) -> Result<Vec<BudgetRequestRecord>, String> {
+    budget_requests::list_task_budget_requests(&state.db_pool, input).await
+}
+
+#[tauri::command]
+pub async fn resolve_task_budget_request(
+    state: State<'_, AppState>,
+    input: ResolveBudgetRequestInput,
+) -> Result<BudgetRequestRecord, String> {
+    let decision = input.decision.as_str().to_string();
+    let decided_by = input
+        .decided_by
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("ui")
+        .to_string();
+    let resolved = budget_requests::resolve_budget_request(&state.db_pool, input).await?;
+
+    metrics::record_audit_event(
+        &state.db_pool,
+        decided_by.as_str(),
+        "task_budget_request_resolved",
+        Some(resolved.task_id.as_str()),
+        Some(&format!(
+            "{{\"requestId\":\"{}\",\"decision\":\"{}\",\"status\":\"{}\",\"approvedIncrement\":{}}}",
+            resolved.id,
+            decision,
+            resolved.status,
+            resolved.approved_increment.unwrap_or(0)
+        )),
+    )
+    .await?;
+
+    Ok(resolved)
 }
 
 #[tauri::command]
@@ -109,6 +213,14 @@ pub async fn list_audit_log(
     input: ListAuditLogInput,
 ) -> Result<Vec<AuditLogEntry>, String> {
     metrics::list_audit_log(&state.db_pool, input).await
+}
+
+#[tauri::command]
+pub async fn list_task_activity(
+    state: State<'_, AppState>,
+    input: ListTaskActivityInput,
+) -> Result<Vec<AuditLogEntry>, String> {
+    metrics::list_task_activity(&state.db_pool, input).await
 }
 
 #[tauri::command]

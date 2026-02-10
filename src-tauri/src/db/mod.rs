@@ -1,3 +1,4 @@
+pub mod budget_requests;
 pub mod metrics;
 pub mod mutations;
 pub mod tasks;

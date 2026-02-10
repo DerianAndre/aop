@@ -1,6 +1,7 @@
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
+use std::collections::VecDeque;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -88,6 +89,33 @@ pub struct UpdateTaskOutcomeInput {
     pub error_message: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskControlAction {
+    Pause,
+    Resume,
+    Stop,
+}
+
+impl TaskControlAction {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TaskControlAction::Pause => "pause",
+            TaskControlAction::Resume => "resume",
+            TaskControlAction::Stop => "stop",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControlTaskInput {
+    pub task_id: String,
+    pub action: TaskControlAction,
+    pub include_descendants: Option<bool>,
+    pub reason: Option<String>,
+}
+
 pub async fn create_task(pool: &SqlitePool, input: CreateTaskInput) -> Result<TaskRecord, String> {
     create_task_record(
         pool,
@@ -162,6 +190,126 @@ pub async fn get_tasks(pool: &SqlitePool) -> Result<Vec<TaskRecord>, String> {
     .map_err(|error| format!("Failed to fetch tasks: {error}"))
 }
 
+pub async fn collect_task_tree_ids(
+    pool: &SqlitePool,
+    root_task_id: &str,
+) -> Result<Vec<String>, String> {
+    let root = root_task_id.trim();
+    if root.is_empty() {
+        return Err("taskId is required".to_string());
+    }
+
+    get_task_by_id(pool, root).await?;
+
+    let mut ordered_ids = vec![root.to_string()];
+    let mut queue: VecDeque<String> = VecDeque::from([root.to_string()]);
+
+    while let Some(parent_id) = queue.pop_front() {
+        let children = sqlx::query_scalar::<_, String>(
+            r#"
+            SELECT id
+            FROM aop_tasks
+            WHERE parent_id = ?
+            ORDER BY created_at ASC
+            "#,
+        )
+        .bind(parent_id)
+        .fetch_all(pool)
+        .await
+        .map_err(|error| format!("Failed to resolve task descendants: {error}"))?;
+
+        for child_id in children {
+            queue.push_back(child_id.clone());
+            ordered_ids.push(child_id);
+        }
+    }
+
+    Ok(ordered_ids)
+}
+
+pub async fn control_task(
+    pool: &SqlitePool,
+    input: ControlTaskInput,
+) -> Result<Vec<TaskRecord>, String> {
+    let root_task_id = input.task_id.trim();
+    if root_task_id.is_empty() {
+        return Err("taskId is required".to_string());
+    }
+
+    let target_ids = if input.include_descendants.unwrap_or(true) {
+        collect_task_tree_ids(pool, root_task_id).await?
+    } else {
+        get_task_by_id(pool, root_task_id).await?;
+        vec![root_task_id.to_string()]
+    };
+
+    let stop_reason = input
+        .reason
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("stopped by user");
+    let mut updated = Vec::new();
+
+    for task_id in target_ids {
+        let current = get_task_by_id(pool, &task_id).await?;
+        match input.action {
+            TaskControlAction::Pause => {
+                if matches!(current.status.as_str(), "completed" | "failed" | "paused") {
+                    continue;
+                }
+
+                let pause_marker = format!("__aop_paused_prev_status:{}", current.status);
+                let record = update_task_status(
+                    pool,
+                    UpdateTaskStatusInput {
+                        task_id: task_id.clone(),
+                        status: TaskStatus::Paused,
+                        error_message: Some(pause_marker),
+                    },
+                )
+                .await?;
+                updated.push(record);
+            }
+            TaskControlAction::Resume => {
+                if current.status != "paused" {
+                    continue;
+                }
+
+                let resume_status = paused_previous_status(current.error_message.as_deref());
+                let record = update_task_status(
+                    pool,
+                    UpdateTaskStatusInput {
+                        task_id: task_id.clone(),
+                        status: resume_status,
+                        error_message: None,
+                    },
+                )
+                .await?;
+                updated.push(record);
+            }
+            TaskControlAction::Stop => {
+                if matches!(current.status.as_str(), "completed" | "failed") {
+                    continue;
+                }
+
+                let record = update_task_status(
+                    pool,
+                    UpdateTaskStatusInput {
+                        task_id: task_id.clone(),
+                        status: TaskStatus::Failed,
+                        error_message: Some(format!("stopped_by_user:{stop_reason}")),
+                    },
+                )
+                .await?;
+                updated.push(record);
+            }
+        }
+    }
+
+    Ok(updated)
+}
+
 pub async fn update_task_status(
     pool: &SqlitePool,
     input: UpdateTaskStatusInput,
@@ -192,6 +340,42 @@ pub async fn update_task_status(
     }
 
     get_task_by_id(pool, input.task_id.trim()).await
+}
+
+pub async fn increase_task_budget(
+    pool: &SqlitePool,
+    task_id: &str,
+    increment: i64,
+) -> Result<TaskRecord, String> {
+    let trimmed_task_id = task_id.trim();
+    if trimmed_task_id.is_empty() {
+        return Err("taskId is required".to_string());
+    }
+    if increment <= 0 {
+        return Err("increment must be greater than 0".to_string());
+    }
+
+    let now = Utc::now().timestamp();
+    let rows_affected = sqlx::query(
+        r#"
+        UPDATE aop_tasks
+        SET token_budget = token_budget + ?, updated_at = ?
+        WHERE id = ?
+        "#,
+    )
+    .bind(increment)
+    .bind(now)
+    .bind(trimmed_task_id)
+    .execute(pool)
+    .await
+    .map_err(|error| format!("Failed to increase task budget: {error}"))?
+    .rows_affected();
+
+    if rows_affected == 0 {
+        return Err(format!("Task '{}' not found", trimmed_task_id));
+    }
+
+    get_task_by_id(pool, trimmed_task_id).await
 }
 
 pub async fn update_task_outcome(
@@ -273,6 +457,23 @@ fn validate_create_record_input(input: &CreateTaskRecordInput) -> Result<(), Str
     }
 
     Ok(())
+}
+
+fn paused_previous_status(error_message: Option<&str>) -> TaskStatus {
+    const MARKER: &str = "__aop_paused_prev_status:";
+    let Some(raw) = error_message else {
+        return TaskStatus::Executing;
+    };
+
+    let Some(value) = raw.trim().strip_prefix(MARKER) else {
+        return TaskStatus::Executing;
+    };
+
+    match value {
+        "pending" => TaskStatus::Pending,
+        "executing" => TaskStatus::Executing,
+        _ => TaskStatus::Executing,
+    }
 }
 
 #[cfg(test)]
@@ -392,5 +593,105 @@ mod tests {
         assert_eq!(updated.compliance_score, 82);
         assert_eq!(updated.checksum_before.as_deref(), Some("before_hash"));
         assert_eq!(updated.checksum_after.as_deref(), Some("after_hash"));
+    }
+
+    #[tokio::test]
+    async fn control_task_pause_resume_and_stop_with_descendants() {
+        let pool = setup_test_pool().await;
+
+        let parent = create_task(
+            &pool,
+            CreateTaskInput {
+                parent_id: None,
+                tier: 1,
+                domain: "platform".to_string(),
+                objective: "Parent".to_string(),
+                token_budget: 2000,
+            },
+        )
+        .await
+        .expect("parent task should be created");
+        let child = create_task(
+            &pool,
+            CreateTaskInput {
+                parent_id: Some(parent.id.clone()),
+                tier: 2,
+                domain: "auth".to_string(),
+                objective: "Child".to_string(),
+                token_budget: 1600,
+            },
+        )
+        .await
+        .expect("child task should be created");
+
+        let paused = control_task(
+            &pool,
+            ControlTaskInput {
+                task_id: parent.id.clone(),
+                action: TaskControlAction::Pause,
+                include_descendants: Some(true),
+                reason: None,
+            },
+        )
+        .await
+        .expect("pause control should succeed");
+        assert_eq!(paused.len(), 2);
+        assert!(paused.iter().all(|task| task.status == "paused"));
+
+        let resumed = control_task(
+            &pool,
+            ControlTaskInput {
+                task_id: parent.id.clone(),
+                action: TaskControlAction::Resume,
+                include_descendants: Some(true),
+                reason: None,
+            },
+        )
+        .await
+        .expect("resume control should succeed");
+        assert_eq!(resumed.len(), 2);
+        assert!(resumed.iter().all(|task| task.status == "pending"));
+
+        let stopped = control_task(
+            &pool,
+            ControlTaskInput {
+                task_id: child.id.clone(),
+                action: TaskControlAction::Stop,
+                include_descendants: Some(false),
+                reason: Some("manual kill".to_string()),
+            },
+        )
+        .await
+        .expect("stop control should succeed");
+        assert_eq!(stopped.len(), 1);
+        assert_eq!(stopped[0].status, "failed");
+        assert!(stopped[0]
+            .error_message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("stopped_by_user"));
+    }
+
+    #[tokio::test]
+    async fn increase_task_budget_updates_budget() {
+        let pool = setup_test_pool().await;
+
+        let created = create_task(
+            &pool,
+            CreateTaskInput {
+                parent_id: None,
+                tier: 2,
+                domain: "platform".to_string(),
+                objective: "Budget test".to_string(),
+                token_budget: 1800,
+            },
+        )
+        .await
+        .expect("task should be created");
+
+        let updated = increase_task_budget(&pool, &created.id, 700)
+            .await
+            .expect("budget should increase");
+        assert_eq!(updated.token_budget, 2500);
     }
 }

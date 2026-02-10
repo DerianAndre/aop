@@ -110,6 +110,14 @@ export function AopSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       <SidebarFooter>
         <div className="p-4 text-xs text-muted-foreground">
           AI Orchestration Platform
+          <br />
+          <a
+            href="https://www.github.com/derianandre"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Derian Castillo
+          </a>
         </div>
       </SidebarFooter>
     </Sidebar>

@@ -43,6 +43,14 @@ describe('App', () => {
         return 'C:/tmp/project'
       }
 
+      if (command === 'list_task_activity') {
+        return []
+      }
+
+      if (command === 'list_task_budget_requests') {
+        return []
+      }
+
       return null
     })
   })

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 
 import TaskGraph from '@/components/TaskGraph'
+import TaskActivityFeed from '@/components/TaskActivityFeed'
+import TaskBudgetPanel from '@/components/TaskBudgetPanel'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
@@ -15,10 +17,10 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
-import { createTask, getTasks } from '@/hooks/useTauri'
+import { controlTask, createTask, getTasks } from '@/hooks/useTauri'
 import { useAopStore } from '@/store/aop-store'
 import type { AppTab } from '@/store/types'
-import type { CreateTaskInput, TaskRecord } from '@/types'
+import type { CreateTaskInput, TaskControlAction, TaskRecord } from '@/types'
 import { Plus } from 'lucide-react'
 
 const DEFAULT_TASK_FORM: CreateTaskInput = {
@@ -57,6 +59,8 @@ export function TasksView() {
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
   const [isCreatingTask, setIsCreatingTask] = useState(false)
   const [createTaskError, setCreateTaskError] = useState<string | null>(null)
+  const [taskControlError, setTaskControlError] = useState<string | null>(null)
+  const [activeTaskControl, setActiveTaskControl] = useState<TaskControlAction | null>(null)
   const [taskForm, setTaskForm] = useState<CreateTaskInput>(DEFAULT_TASK_FORM)
 
   const goToTab = useCallback(
@@ -135,6 +139,29 @@ export function TasksView() {
     }
   }
 
+  async function handleTaskControl(action: TaskControlAction) {
+    if (!selectedTask) {
+      return
+    }
+
+    setTaskControlError(null)
+    setActiveTaskControl(action)
+    try {
+      const updated = await controlTask({
+        taskId: selectedTask.id,
+        action,
+        includeDescendants: true,
+        reason: action === 'stop' ? 'manual stop from task panel' : undefined,
+      })
+      updated.forEach((task) => addTask(task))
+      await loadTasks()
+    } catch (error) {
+      setTaskControlError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setActiveTaskControl(null)
+    }
+  }
+
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_420px]">
       <Card>
@@ -192,6 +219,46 @@ export function TasksView() {
 
               <div className="flex flex-wrap gap-2">
                 <Button
+                  disabled={activeTaskControl !== null}
+                  onClick={() => void handleTaskControl('pause')}
+                  size="sm"
+                  type="button"
+                  variant="outline"
+                >
+                  {activeTaskControl === 'pause' ? 'Pausing...' : 'Pause'}
+                </Button>
+                <Button
+                  disabled={activeTaskControl !== null}
+                  onClick={() => void handleTaskControl('resume')}
+                  size="sm"
+                  type="button"
+                  variant="outline"
+                >
+                  {activeTaskControl === 'resume' ? 'Resuming...' : 'Resume'}
+                </Button>
+                <Button
+                  disabled={activeTaskControl !== null}
+                  onClick={() => void handleTaskControl('stop')}
+                  size="sm"
+                  type="button"
+                  variant="destructive"
+                >
+                  {activeTaskControl === 'stop' ? 'Stopping...' : 'Stop'}
+                </Button>
+              </div>
+
+              {taskControlError ? <p className="text-destructive text-xs whitespace-pre-wrap">{taskControlError}</p> : null}
+
+              <TaskBudgetPanel
+                onChanged={async () => {
+                  await loadTasks()
+                }}
+                task={selectedTask}
+                title="Task Token Budget"
+              />
+
+              <div className="flex flex-wrap gap-2">
+                <Button
                   onClick={() => {
                     selectTask(selectedTask.id)
                     goToTab('mutations')
@@ -213,6 +280,8 @@ export function TasksView() {
                   Open In Dashboard
                 </Button>
               </div>
+
+              <TaskActivityFeed taskId={selectedTask.id} title="Orchestrator + Agents Activity" />
             </>
           ) : (
             <p className="text-muted-foreground text-sm">Select a task in the graph to inspect details.</p>

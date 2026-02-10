@@ -173,6 +173,65 @@ export interface ListAuditLogInput {
   limit?: number
 }
 
+export type TaskControlAction = 'pause' | 'resume' | 'stop'
+
+export interface ControlTaskInput {
+  taskId: string
+  action: TaskControlAction
+  includeDescendants?: boolean
+  reason?: string
+}
+
+export interface ListTaskActivityInput {
+  taskId: string
+  includeDescendants?: boolean
+  limit?: number
+  sinceId?: number
+}
+
+export type BudgetRequestStatus = 'pending' | 'approved' | 'rejected'
+export type BudgetRequestDecision = 'approve' | 'reject'
+
+export interface BudgetRequestRecord {
+  id: string
+  taskId: string
+  requestedBy: string
+  reason: string
+  requestedIncrement: number
+  currentBudget: number
+  currentUsage: number
+  status: BudgetRequestStatus
+  approvedIncrement: number | null
+  resolutionNote: string | null
+  createdAt: number
+  updatedAt: number
+  resolvedAt: number | null
+}
+
+export interface RequestTaskBudgetIncreaseInput {
+  taskId: string
+  requestedBy: string
+  reason: string
+  requestedIncrement: number
+  autoApprove?: boolean
+}
+
+export interface ListTaskBudgetRequestsInput {
+  taskId: string
+  includeDescendants?: boolean
+  status?: BudgetRequestStatus
+  limit?: number
+}
+
+export interface ResolveTaskBudgetRequestInput {
+  requestId: string
+  decision: BudgetRequestDecision
+  approvedIncrement?: number
+  reason?: string
+  decidedBy?: string
+  resumeTask?: boolean
+}
+
 export interface UpdateTaskStatusInput {
   taskId: string
   status: TaskStatus

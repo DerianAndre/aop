@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 
+import TaskActivityFeed from '@/components/TaskActivityFeed'
+import TaskBudgetPanel from '@/components/TaskBudgetPanel'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -7,9 +9,9 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import TokenBurnChart from '@/components/TokenBurnChart'
 import { useTargetProjectConfig } from '@/hooks/useTargetProjectConfig'
-import { getTasks, orchestrateObjective } from '@/hooks/useTauri'
+import { controlTask, getTasks, orchestrateObjective } from '@/hooks/useTauri'
 import { useAopStore } from '@/store/aop-store'
-import type { OrchestrationResult, TaskRecord } from '@/types'
+import type { OrchestrationResult, TaskControlAction, TaskRecord } from '@/types'
 
 function formatNumber(value: number): string {
   return new Intl.NumberFormat().format(value)
@@ -45,6 +47,8 @@ export function DashboardView() {
   const [maxRiskTolerance, setMaxRiskTolerance] = useState(0.6)
   const [isOrchestrating, setIsOrchestrating] = useState(false)
   const [orchestrationError, setOrchestrationError] = useState<string | null>(null)
+  const [orchestrationControlError, setOrchestrationControlError] = useState<string | null>(null)
+  const [activeControlAction, setActiveControlAction] = useState<TaskControlAction | null>(null)
   const [orchestrationResult, setOrchestrationResult] = useState<OrchestrationResult | null>(null)
 
   const loadTasks = useCallback(async () => {
@@ -63,6 +67,18 @@ export function DashboardView() {
   useEffect(() => {
     void loadTasks()
   }, [loadTasks])
+
+  useEffect(() => {
+    if (!isOrchestrating) {
+      return
+    }
+
+    const intervalRef = setInterval(() => {
+      void loadTasks()
+    }, 1200)
+
+    return () => clearInterval(intervalRef)
+  }, [isOrchestrating, loadTasks])
 
   async function handleOrchestrate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -106,6 +122,29 @@ export function DashboardView() {
     }
   }
 
+  async function handleOrchestrationControl(action: TaskControlAction) {
+    if (!monitoredTaskId) {
+      return
+    }
+
+    setOrchestrationControlError(null)
+    setActiveControlAction(action)
+    try {
+      const updatedTasks = await controlTask({
+        taskId: monitoredTaskId,
+        action,
+        includeDescendants: true,
+        reason: action === 'stop' ? 'manual stop from dashboard' : undefined,
+      })
+      updatedTasks.forEach((task) => addTask(task))
+      await loadTasks()
+    } catch (error) {
+      setOrchestrationControlError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setActiveControlAction(null)
+    }
+  }
+
   const activeTasks = useMemo(
     () => tasks.filter((task) => task.status !== 'completed' && task.status !== 'failed').length,
     [tasks],
@@ -120,6 +159,15 @@ export function DashboardView() {
     const total = tasks.reduce((sum, task) => sum + task.complianceScore, 0)
     return Math.max(0, Math.min(100, total / tasks.length))
   }, [tasks])
+  const executingTier1TaskId = useMemo(
+    () => tasks.find((task) => task.tier === 1 && task.status === 'executing')?.id ?? null,
+    [tasks],
+  )
+  const monitoredTaskId = orchestrationResult?.rootTask.id ?? executingTier1TaskId
+  const monitoredTask = useMemo(
+    () => tasks.find((task) => task.id === monitoredTaskId) ?? null,
+    [monitoredTaskId, tasks],
+  )
 
   return (
     <div className="space-y-6">
@@ -253,6 +301,90 @@ export function DashboardView() {
                   </div>
                 ))}
               </div>
+
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  disabled={activeControlAction !== null}
+                  onClick={() => void handleOrchestrationControl('pause')}
+                  size="sm"
+                  type="button"
+                  variant="outline"
+                >
+                  {activeControlAction === 'pause' ? 'Pausing...' : 'Pause T1/T2/T3'}
+                </Button>
+                <Button
+                  disabled={activeControlAction !== null}
+                  onClick={() => void handleOrchestrationControl('resume')}
+                  size="sm"
+                  type="button"
+                  variant="outline"
+                >
+                  {activeControlAction === 'resume' ? 'Resuming...' : 'Resume T1/T2/T3'}
+                </Button>
+                <Button
+                  disabled={activeControlAction !== null}
+                  onClick={() => void handleOrchestrationControl('stop')}
+                  size="sm"
+                  type="button"
+                  variant="destructive"
+                >
+                  {activeControlAction === 'stop' ? 'Stopping...' : 'Stop T1/T2/T3'}
+                </Button>
+              </div>
+
+              {orchestrationControlError ? (
+                <p className="text-destructive text-sm whitespace-pre-wrap">{orchestrationControlError}</p>
+              ) : null}
+            </div>
+          ) : null}
+
+          <TaskBudgetPanel
+            includeDescendants
+            onChanged={async () => {
+              await loadTasks()
+            }}
+            task={monitoredTask}
+            title="Orchestration Budget Controls"
+          />
+
+          {monitoredTaskId ? (
+            <TaskActivityFeed taskId={monitoredTaskId} title="Tier 1 + Tier 2 + Tier 3 Live Activity" />
+          ) : null}
+
+          {!orchestrationResult && monitoredTaskId ? (
+            <div className="space-y-2">
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  disabled={activeControlAction !== null}
+                  onClick={() => void handleOrchestrationControl('pause')}
+                  size="sm"
+                  type="button"
+                  variant="outline"
+                >
+                  {activeControlAction === 'pause' ? 'Pausing...' : 'Pause T1/T2/T3'}
+                </Button>
+                <Button
+                  disabled={activeControlAction !== null}
+                  onClick={() => void handleOrchestrationControl('resume')}
+                  size="sm"
+                  type="button"
+                  variant="outline"
+                >
+                  {activeControlAction === 'resume' ? 'Resuming...' : 'Resume T1/T2/T3'}
+                </Button>
+                <Button
+                  disabled={activeControlAction !== null}
+                  onClick={() => void handleOrchestrationControl('stop')}
+                  size="sm"
+                  type="button"
+                  variant="destructive"
+                >
+                  {activeControlAction === 'stop' ? 'Stopping...' : 'Stop T1/T2/T3'}
+                </Button>
+              </div>
+              {orchestrationControlError ? (
+                <p className="text-destructive text-sm whitespace-pre-wrap">{orchestrationControlError}</p>
+              ) : null}
             </div>
           ) : null}
         </CardContent>

@@ -8,11 +8,14 @@ use sqlx::SqlitePool;
 use crate::agents::specialist::{self, DiffProposal, SpecialistTask};
 use crate::agents::CodeBlock;
 use crate::db::mutations::{self, CreateMutationInput};
-use crate::db::tasks::{self, CreateTaskRecordInput, TaskStatus, UpdateTaskStatusInput};
+use crate::db::tasks::{
+    self, CreateTaskRecordInput, TaskStatus, UpdateTaskOutcomeInput, UpdateTaskStatusInput,
+};
 use crate::llm_adapter;
 use crate::mcp_bridge::client::BridgeClient;
 use crate::mcp_bridge::tool_caller::{self, ReadTargetFileInput, SearchTargetFilesInput};
 use crate::model_registry::ModelRegistry;
+use crate::task_runtime;
 use crate::vector::search;
 use crate::vector::ContextChunk;
 
@@ -79,6 +82,17 @@ pub async fn execute_domain_task(
         },
     )
     .await?;
+    task_runtime::record_task_activity(
+        pool,
+        "tier2_domain_leader",
+        "tier2_execution_started",
+        &task.id,
+        &format!(
+            "domain={} model={}/{} objective={}",
+            task.domain, tier2_model.provider, tier2_model.model_id, task.objective
+        ),
+    )
+    .await?;
 
     let chunks = search::query_codebase(
         pool,
@@ -97,6 +111,19 @@ pub async fn execute_domain_task(
         &input,
     )
     .await;
+    task_runtime::record_task_activity(
+        pool,
+        "tier2_domain_leader",
+        "tier2_context_ready",
+        &task.id,
+        &format!(
+            "semanticChunks={} candidateFiles={} personas={}",
+            chunks.len(),
+            candidate_files.len(),
+            personas_for_domain(&task.domain).len()
+        ),
+    )
+    .await?;
 
     let personas = personas_for_domain(&task.domain);
     let specialist_budgets = distribute_budget_for_specialists(task.token_budget, personas.len());
@@ -104,6 +131,22 @@ pub async fn execute_domain_task(
     let mut tokens_spent = 0_u32;
 
     for (idx, persona) in personas.iter().enumerate() {
+        task_runtime::cooperative_checkpoint(
+            pool,
+            &task.id,
+            "tier2_domain_leader",
+            &format!("persona_{persona}_queue"),
+        )
+        .await?;
+        task_runtime::ensure_budget_headroom(
+            pool,
+            &task.id,
+            "tier2_domain_leader",
+            &format!("persona_{persona}_budget_check"),
+            specialist_budgets[idx],
+        )
+        .await?;
+
         let specialist_objective =
             build_specialist_objective(&task.domain, &task.objective, persona.as_str(), idx);
         let specialist_model = model_registry.resolve_with_supported_providers(
@@ -133,8 +176,26 @@ pub async fn execute_domain_task(
             },
         )
         .await?;
+        task_runtime::record_task_activity(
+            pool,
+            "tier2_domain_leader",
+            "tier3_task_created",
+            &specialist_task_record.id,
+            &format!(
+                "parent={} persona={} targetFile={} budget={}",
+                task.id, persona, target_file, specialist_budgets[idx]
+            ),
+        )
+        .await?;
 
         let file_content = read_file_with_fallback(bridge_client, &input, &target_file).await;
+        task_runtime::cooperative_checkpoint(
+            pool,
+            &specialist_task_record.id,
+            "tier2_domain_leader",
+            &format!("persona_{persona}_pre_execute"),
+        )
+        .await?;
         tasks::update_task_status(
             pool,
             UpdateTaskStatusInput {
@@ -142,6 +203,17 @@ pub async fn execute_domain_task(
                 status: TaskStatus::Executing,
                 error_message: None,
             },
+        )
+        .await?;
+        task_runtime::record_task_activity(
+            pool,
+            &format!("tier3_{}", persona),
+            "specialist_execution_started",
+            &specialist_task_record.id,
+            &format!(
+                "model={}/{} objective={}",
+                specialist_model.provider, specialist_model.model_id, specialist_objective
+            ),
         )
         .await?;
 
@@ -175,7 +247,41 @@ pub async fn execute_domain_task(
 
         match specialist::run_specialist_task(&specialist_task, file_content.as_deref()) {
             Ok(proposal) => {
+                if let Err(error) = task_runtime::cooperative_checkpoint(
+                    pool,
+                    &task.id,
+                    "tier2_domain_leader",
+                    &format!("persona_{persona}_post_execute"),
+                )
+                .await
+                {
+                    tasks::update_task_status(
+                        pool,
+                        UpdateTaskStatusInput {
+                            task_id: specialist_task_record.id.clone(),
+                            status: TaskStatus::Failed,
+                            error_message: Some(error),
+                        },
+                    )
+                    .await?;
+                    continue;
+                }
+
                 tokens_spent = tokens_spent.saturating_add(proposal.tokens_used);
+                tasks::update_task_outcome(
+                    pool,
+                    UpdateTaskOutcomeInput {
+                        task_id: task.id.clone(),
+                        status: TaskStatus::Executing,
+                        token_usage: Some(i64::from(tokens_spent)),
+                        context_efficiency_ratio: None,
+                        compliance_score: None,
+                        checksum_before: None,
+                        checksum_after: None,
+                        error_message: None,
+                    },
+                )
+                .await?;
 
                 mutations::create_mutation(
                     pool,
@@ -191,26 +297,59 @@ pub async fn execute_domain_task(
                 )
                 .await?;
 
-                tasks::update_task_status(
+                tasks::update_task_outcome(
                     pool,
-                    UpdateTaskStatusInput {
+                    UpdateTaskOutcomeInput {
                         task_id: specialist_task_record.id,
                         status: TaskStatus::Completed,
+                        token_usage: Some(i64::from(proposal.tokens_used)),
+                        context_efficiency_ratio: None,
+                        compliance_score: None,
+                        checksum_before: None,
+                        checksum_after: None,
                         error_message: None,
                     },
+                )
+                .await?;
+                task_runtime::record_task_activity(
+                    pool,
+                    &format!("tier3_{}", persona),
+                    "specialist_proposal_persisted",
+                    &task.id,
+                    &format!(
+                        "agentUid={} file={} confidence={:.2} tokensUsed={}",
+                        proposal.agent_uid,
+                        proposal.file_path,
+                        proposal.confidence,
+                        proposal.tokens_used
+                    ),
                 )
                 .await?;
 
                 proposals.push(proposal);
             }
             Err(error) => {
-                tasks::update_task_status(
+                let specialist_task_id = specialist_task_record.id.clone();
+                tasks::update_task_outcome(
                     pool,
-                    UpdateTaskStatusInput {
-                        task_id: specialist_task_record.id,
+                    UpdateTaskOutcomeInput {
+                        task_id: specialist_task_id.clone(),
                         status: TaskStatus::Failed,
-                        error_message: Some(error),
+                        token_usage: Some(0),
+                        context_efficiency_ratio: None,
+                        compliance_score: None,
+                        checksum_before: None,
+                        checksum_after: None,
+                        error_message: Some(error.clone()),
                     },
+                )
+                .await?;
+                task_runtime::record_task_activity(
+                    pool,
+                    &format!("tier3_{}", persona),
+                    "specialist_execution_failed",
+                    &specialist_task_id,
+                    &error,
                 )
                 .await?;
             }
@@ -237,13 +376,32 @@ pub async fn execute_domain_task(
         TaskStatus::Paused
     };
 
-    tasks::update_task_status(
+    tasks::update_task_outcome(
         pool,
-        UpdateTaskStatusInput {
+        UpdateTaskOutcomeInput {
             task_id: task.id.clone(),
             status: final_task_status,
+            token_usage: Some(i64::from(tokens_spent)),
+            context_efficiency_ratio: None,
+            compliance_score: Some(compliance_score),
+            checksum_before: None,
+            checksum_after: None,
             error_message: None,
         },
+    )
+    .await?;
+    task_runtime::record_task_activity(
+        pool,
+        "tier2_domain_leader",
+        "tier2_execution_completed",
+        &task.id,
+        &format!(
+            "status={} proposals={} complianceScore={} tokensSpent={}",
+            status,
+            proposals.len(),
+            compliance_score,
+            tokens_spent
+        ),
     )
     .await?;
 

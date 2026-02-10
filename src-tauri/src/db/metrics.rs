@@ -1,6 +1,9 @@
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
+use sqlx::{QueryBuilder, Sqlite};
+
+use crate::db::tasks;
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
@@ -18,6 +21,15 @@ pub struct AuditLogEntry {
 pub struct ListAuditLogInput {
     pub target_id: Option<String>,
     pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListTaskActivityInput {
+    pub task_id: String,
+    pub include_descendants: Option<bool>,
+    pub limit: Option<u32>,
+    pub since_id: Option<i64>,
 }
 
 pub async fn record_audit_event(
@@ -88,6 +100,56 @@ pub async fn list_audit_log(
     }
 }
 
+pub async fn list_task_activity(
+    pool: &SqlitePool,
+    input: ListTaskActivityInput,
+) -> Result<Vec<AuditLogEntry>, String> {
+    let task_id = input.task_id.trim();
+    if task_id.is_empty() {
+        return Err("taskId is required".to_string());
+    }
+
+    let target_ids = if input.include_descendants.unwrap_or(true) {
+        tasks::collect_task_tree_ids(pool, task_id).await?
+    } else {
+        vec![task_id.to_string()]
+    };
+    if target_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let limit = i64::from(input.limit.unwrap_or(100).clamp(1, 500));
+    let mut query_builder: QueryBuilder<'_, Sqlite> = QueryBuilder::new(
+        r#"
+        SELECT id, timestamp, actor, action, target_id, details
+        FROM aop_audit_log
+        WHERE target_id IN (
+        "#,
+    );
+
+    {
+        let mut separated = query_builder.separated(", ");
+        for id in &target_ids {
+            separated.push_bind(id);
+        }
+    }
+    query_builder.push(")");
+
+    if let Some(since_id) = input.since_id {
+        query_builder.push(" AND id > ").push_bind(since_id);
+    }
+
+    query_builder
+        .push(" ORDER BY id DESC LIMIT ")
+        .push_bind(limit);
+
+    query_builder
+        .build_query_as::<AuditLogEntry>()
+        .fetch_all(pool)
+        .await
+        .map_err(|error| format!("Failed to list task activity: {error}"))
+}
+
 #[cfg(test)]
 mod tests {
     use sqlx::sqlite::SqlitePoolOptions;
@@ -149,5 +211,54 @@ mod tests {
         .await
         .expect("audit logs should list");
         assert_eq!(all.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn lists_task_activity_with_descendants() {
+        let pool = setup_test_pool().await;
+
+        sqlx::query(
+            r#"
+            INSERT INTO aop_tasks (id, parent_id, tier, domain, objective, status, token_budget, token_usage, context_efficiency_ratio, risk_factor, compliance_score, checksum_before, checksum_after, error_message, retry_count, created_at, updated_at)
+            VALUES ('root', NULL, 1, 'platform', 'root', 'pending', 1000, 0, 0.0, 0.0, 0, NULL, NULL, NULL, 0, 1, 1),
+                   ('child', 'root', 2, 'auth', 'child', 'pending', 1000, 0, 0.0, 0.0, 0, NULL, NULL, NULL, 0, 2, 2)
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("fixture tasks should be inserted");
+
+        record_audit_event(&pool, "tier1", "start", Some("root"), Some("root running"))
+            .await
+            .expect("root event should be inserted");
+        record_audit_event(
+            &pool,
+            "tier3_security",
+            "specialist_step",
+            Some("child"),
+            Some("child running"),
+        )
+        .await
+        .expect("child event should be inserted");
+
+        let events = list_task_activity(
+            &pool,
+            ListTaskActivityInput {
+                task_id: "root".to_string(),
+                include_descendants: Some(true),
+                limit: Some(50),
+                since_id: None,
+            },
+        )
+        .await
+        .expect("task activity should list");
+
+        assert_eq!(events.len(), 2);
+        assert!(events
+            .iter()
+            .any(|event| event.target_id.as_deref() == Some("root")));
+        assert!(events
+            .iter()
+            .any(|event| event.target_id.as_deref() == Some("child")));
     }
 }

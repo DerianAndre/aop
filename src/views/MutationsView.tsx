@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import ConflictResolutionPanel from '@/components/ConflictResolutionPanel'
 import DiffReviewer from '@/components/DiffReviewer'
+import TaskActivityFeed from '@/components/TaskActivityFeed'
+import TaskBudgetPanel from '@/components/TaskBudgetPanel'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -11,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { useTargetProjectConfig } from '@/hooks/useTargetProjectConfig'
 import {
+  controlTask,
   executeDomainTask,
   getTasks,
   listAuditLog,
@@ -27,6 +30,7 @@ import type {
   MutationPipelineResult,
   MutationRecord,
   PipelineStepResult,
+  TaskControlAction,
   TaskRecord,
 } from '@/types'
 
@@ -83,6 +87,8 @@ export function MutationsView() {
   const [feedback, setFeedback] = useState<string | null>(null)
   const [reviewerFeedback, setReviewerFeedback] = useState<string | null>(null)
   const [conflictFeedback, setConflictFeedback] = useState<string | null>(null)
+  const [taskControlError, setTaskControlError] = useState<string | null>(null)
+  const [activeTaskControl, setActiveTaskControl] = useState<TaskControlAction | null>(null)
 
   const selectedTask: TaskRecord | null =
     tasks.find((task) => task.id === selectedTaskId) ??
@@ -350,6 +356,32 @@ export function MutationsView() {
     void loadOriginalForMutation(mutation)
   }
 
+  async function handleTaskControl(action: TaskControlAction) {
+    if (!selectedTask) {
+      return
+    }
+
+    setTaskControlError(null)
+    setActiveTaskControl(action)
+    try {
+      const updated = await controlTask({
+        taskId: selectedTask.id,
+        action,
+        includeDescendants: true,
+        reason: action === 'stop' ? 'manual stop from mutations panel' : undefined,
+      })
+      updated.forEach((task) => addTask(task))
+      await loadTasks()
+      if (selectedTaskId) {
+        await loadMutationsForTask(selectedTaskId, false)
+      }
+    } catch (error) {
+      setTaskControlError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setActiveTaskControl(null)
+    }
+  }
+
   return (
     <div className="space-y-6">
       <Card>
@@ -403,27 +435,75 @@ export function MutationsView() {
           </div>
 
           {selectedTask ? (
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="outline">Tier {selectedTask.tier}</Badge>
-              <Badge variant="outline">{selectedTask.domain}</Badge>
-              <Badge variant="outline">{selectedTask.status}</Badge>
-              <span className="text-muted-foreground text-sm">
-                tokens {selectedTask.tokenUsage}/{selectedTask.tokenBudget}
-              </span>
-              {selectedTask.tier === 2 ? (
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant="outline">Tier {selectedTask.tier}</Badge>
+                <Badge variant="outline">{selectedTask.domain}</Badge>
+                <Badge variant="outline">{selectedTask.status}</Badge>
+                <span className="text-muted-foreground text-sm">
+                  tokens {selectedTask.tokenUsage}/{selectedTask.tokenBudget}
+                </span>
+                {selectedTask.tier === 2 ? (
+                  <Button
+                    disabled={isExecutingTier2}
+                    onClick={() => void handleExecuteTier2Task(selectedTask)}
+                    size="sm"
+                    type="button"
+                  >
+                    {isExecutingTier2 ? 'Running Tier 2...' : 'Execute Tier 2'}
+                  </Button>
+                ) : null}
+              </div>
+
+              <div className="flex flex-wrap gap-2">
                 <Button
-                  disabled={isExecutingTier2}
-                  onClick={() => void handleExecuteTier2Task(selectedTask)}
+                  disabled={activeTaskControl !== null}
+                  onClick={() => void handleTaskControl('pause')}
                   size="sm"
                   type="button"
+                  variant="outline"
                 >
-                  {isExecutingTier2 ? 'Running Tier 2...' : 'Execute Tier 2'}
+                  {activeTaskControl === 'pause' ? 'Pausing...' : 'Pause T1/T2/T3'}
                 </Button>
+                <Button
+                  disabled={activeTaskControl !== null}
+                  onClick={() => void handleTaskControl('resume')}
+                  size="sm"
+                  type="button"
+                  variant="outline"
+                >
+                  {activeTaskControl === 'resume' ? 'Resuming...' : 'Resume T1/T2/T3'}
+                </Button>
+                <Button
+                  disabled={activeTaskControl !== null}
+                  onClick={() => void handleTaskControl('stop')}
+                  size="sm"
+                  type="button"
+                  variant="destructive"
+                >
+                  {activeTaskControl === 'stop' ? 'Stopping...' : 'Stop T1/T2/T3'}
+                </Button>
+              </div>
+
+              {taskControlError ? (
+                <p className="text-destructive text-xs whitespace-pre-wrap">{taskControlError}</p>
               ) : null}
             </div>
           ) : null}
 
           {feedback ? <p className="text-muted-foreground text-sm whitespace-pre-wrap">{feedback}</p> : null}
+          <TaskBudgetPanel
+            includeDescendants
+            onChanged={async () => {
+              await loadTasks()
+              if (selectedTaskId) {
+                await loadMutationsForTask(selectedTaskId, false)
+              }
+            }}
+            task={selectedTask}
+            title="Task Budget and Requests"
+          />
+          <TaskActivityFeed taskId={selectedTaskId} title="Task Activity (Tier 1/2/3)" />
         </CardContent>
       </Card>
 

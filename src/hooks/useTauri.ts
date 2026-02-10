@@ -2,14 +2,18 @@ import { invoke } from '@tauri-apps/api/core'
 
 import type {
   AuditLogEntry,
+  BudgetRequestRecord,
   CreateTaskInput,
   ContextChunk,
+  ControlTaskInput,
   DirectoryListing,
   ExecuteDomainTaskInput,
   IndexProjectResult,
   IndexTargetProjectInput,
   IntentSummary,
   ListAuditLogInput,
+  ListTaskBudgetRequestsInput,
+  ListTaskActivityInput,
   ListTargetDirInput,
   ListTaskMutationsInput,
   MutationPipelineResult,
@@ -19,7 +23,9 @@ import type {
   OrchestrationResult,
   QueryCodebaseInput,
   ReadTargetFileInput,
+  RequestTaskBudgetIncreaseInput,
   RequestMutationRevisionInput,
+  ResolveTaskBudgetRequestInput,
   RunMutationPipelineInput,
   SearchResult,
   SearchTargetFilesInput,
@@ -40,6 +46,22 @@ export async function createTask(input: CreateTaskInput): Promise<TaskRecord> {
 
 export async function updateTaskStatus(input: UpdateTaskStatusInput): Promise<TaskRecord> {
   return invoke<TaskRecord>('update_task_status', { input })
+}
+
+export async function controlTask(input: ControlTaskInput): Promise<TaskRecord[]> {
+  return invoke<TaskRecord[]>('control_task', { input })
+}
+
+export async function requestTaskBudgetIncrease(input: RequestTaskBudgetIncreaseInput): Promise<BudgetRequestRecord> {
+  return invoke<BudgetRequestRecord>('request_task_budget_increase', { input })
+}
+
+export async function listTaskBudgetRequests(input: ListTaskBudgetRequestsInput): Promise<BudgetRequestRecord[]> {
+  return invoke<BudgetRequestRecord[]>('list_task_budget_requests', { input })
+}
+
+export async function resolveTaskBudgetRequest(input: ResolveTaskBudgetRequestInput): Promise<BudgetRequestRecord> {
+  return invoke<BudgetRequestRecord>('resolve_task_budget_request', { input })
 }
 
 export async function orchestrateObjective(input: UserObjectiveInput): Promise<OrchestrationResult> {
@@ -68,6 +90,10 @@ export async function requestMutationRevision(input: RequestMutationRevisionInpu
 
 export async function listAuditLog(input: ListAuditLogInput): Promise<AuditLogEntry[]> {
   return invoke<AuditLogEntry[]>('list_audit_log', { input })
+}
+
+export async function listTaskActivity(input: ListTaskActivityInput): Promise<AuditLogEntry[]> {
+  return invoke<AuditLogEntry[]>('list_task_activity', { input })
 }
 
 export async function getDefaultTargetProject(): Promise<string> {
