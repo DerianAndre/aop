@@ -137,3 +137,9 @@ dist
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# AOP build artifacts
+src-tauri/target/
+src-tauri/gen/
+src-tauri/aop_orchestrator.db
+

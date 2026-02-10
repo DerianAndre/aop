@@ -1,0 +1,269 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --background: oklch(0.985 0 0);
+  --foreground: oklch(0.205 0.01 260);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.205 0.01 260);
+  --muted: oklch(0.963 0.005 260);
+  --muted-foreground: oklch(0.496 0.01 260);
+  --border: oklch(0.922 0.01 260);
+  --primary: oklch(0.645 0.173 250);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.577 0.192 250);
+  --success: oklch(0.725 0.148 152);
+  --warning: oklch(0.813 0.161 84);
+  --danger: oklch(0.637 0.237 25);
+  --radius: 0.75rem;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: var(--color-foreground);
+  background:
+    radial-gradient(circle at 20% 20%, color-mix(in oklch, var(--color-primary) 16%, transparent), transparent 45%),
+    radial-gradient(circle at 80% 0%, color-mix(in oklch, var(--warning) 14%, transparent), transparent 35%),
+    var(--color-background);
+  font-family: "Space Grotesk", "Avenir Next", "Segoe UI", sans-serif;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.app-shell {
+  width: min(1080px, 100%);
+  margin: 0 auto;
+  padding: 2rem 1.25rem 2.5rem;
+}
+
+.app-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+
+.app-title {
+  margin: 0;
+  font-size: clamp(1.6rem, 2.4vw, 2.35rem);
+  letter-spacing: -0.03em;
+}
+
+.app-subtitle {
+  margin: 0.35rem 0 0;
+  color: var(--color-muted-foreground);
+  max-width: 56ch;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 400px) minmax(0, 1fr);
+  gap: 1.1rem;
+}
+
+.card {
+  background: color-mix(in oklch, var(--color-card) 90%, transparent);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 18px 40px -34px color-mix(in oklch, var(--color-ring) 50%, transparent);
+  backdrop-filter: blur(7px);
+}
+
+.card-header {
+  padding: 1rem 1rem 0;
+}
+
+.card-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.card-content {
+  padding: 1rem;
+}
+
+.task-form {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.field {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.field label {
+  font-size: 0.82rem;
+  color: var(--color-muted-foreground);
+}
+
+.field input,
+.field select,
+.field textarea {
+  width: 100%;
+  border-radius: 0.55rem;
+  border: 1px solid var(--color-border);
+  background: color-mix(in oklch, white 85%, var(--color-background));
+  color: inherit;
+  padding: 0.62rem 0.7rem;
+  font: inherit;
+}
+
+.field textarea {
+  min-height: 7rem;
+  resize: vertical;
+}
+
+.field input:focus,
+.field select:focus,
+.field textarea:focus {
+  border-color: var(--color-ring);
+  outline: 2px solid color-mix(in oklch, var(--color-ring) 35%, transparent);
+  outline-offset: 1px;
+}
+
+.task-form button {
+  border: 0;
+  border-radius: 0.6rem;
+  padding: 0.72rem 0.95rem;
+  font-weight: 700;
+  color: var(--color-primary-foreground);
+  background: linear-gradient(
+    135deg,
+    color-mix(in oklch, var(--color-primary) 85%, black 10%),
+    color-mix(in oklch, var(--color-primary) 70%, var(--warning) 15%)
+  );
+  cursor: pointer;
+}
+
+.task-form button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.feedback {
+  font-size: 0.85rem;
+  margin: 0;
+  color: var(--danger);
+}
+
+.task-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.7rem;
+}
+
+.task-item {
+  border: 1px solid var(--color-border);
+  border-radius: 0.65rem;
+  padding: 0.8rem 0.9rem;
+  background: color-mix(in oklch, var(--color-card) 92%, transparent);
+}
+
+.task-row {
+  display: flex;
+  gap: 0.55rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.task-domain {
+  font-size: 0.85rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-muted-foreground);
+}
+
+.task-objective {
+  margin: 0.45rem 0 0.55rem;
+  font-size: 0.95rem;
+  line-height: 1.35;
+}
+
+.task-meta {
+  display: flex;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+  font-size: 0.8rem;
+  color: var(--color-muted-foreground);
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 0.2rem 0.56rem;
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
+.status-pending {
+  background: color-mix(in oklch, var(--color-muted) 65%, transparent);
+  color: color-mix(in oklch, var(--color-foreground) 70%, var(--color-muted-foreground));
+}
+
+.status-executing {
+  background: color-mix(in oklch, var(--primary) 26%, white);
+  color: color-mix(in oklch, var(--primary) 78%, black 20%);
+}
+
+.status-completed {
+  background: color-mix(in oklch, var(--success) 30%, white);
+  color: color-mix(in oklch, var(--success) 85%, black 12%);
+}
+
+.status-failed {
+  background: color-mix(in oklch, var(--danger) 23%, white);
+  color: color-mix(in oklch, var(--danger) 80%, black 16%);
+}
+
+.status-paused {
+  background: color-mix(in oklch, var(--warning) 29%, white);
+  color: color-mix(in oklch, var(--warning) 80%, black 20%);
+}
+
+.empty-state {
+  margin: 0;
+  color: var(--color-muted-foreground);
+}
+
+@media (max-width: 900px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}
