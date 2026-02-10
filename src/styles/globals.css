@@ -21,8 +21,8 @@
   --radius: 0.75rem;
 }
 
-@theme inline {
-  /* Existing AOP colors */
+@theme {
+  /* AOP Colors - for Tailwind utility classes */
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -43,8 +43,9 @@
   --color-popover-foreground: var(--card-foreground);
   --color-secondary: var(--muted);
   --color-secondary-foreground: var(--muted-foreground);
+  --color-input: var(--border);
 
-  /* Border radius */
+  /* Border radius tokens */
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
