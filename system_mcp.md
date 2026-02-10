@@ -1,54 +1,54 @@
-# Especificación Técnica: Infraestructura de Comunicación y Memoria Semántica
+# Technical Specification: Communication Infrastructure and Semantic Memory
 
-**Documento de Ingeniería**: AOP-DET-001  
-**Referencia de Sistema**: system.md (AOP_Master_Engineering_Prompt_v2.md)  
-**Arquitecto**: Derian Castillo (Lead Systems Architect)  
-**Nivel de Confidencialidad**: Operativo Crítico  
-**Última Actualización**: Febrero 2026
+**Engineering Document**: AOP-DET-001  
+**System Reference**: system.md (AOP_Master_Engineering_Prompt_v2.md)  
+**Architect**: Derian Castillo (Lead Systems Architect)  
+**Confidentiality Level**: Critical Operational  
+**Last Updated**: February 2026
 
 ---
 
-## 0. Dependencias y Versiones
+## 0. Dependencies and Versions
 
-Todas las versiones están verificadas como estables a febrero 2026.
+All versions are verified as stable as of February 2026.
 
-### Rust (Cargo.toml) — Dependencias específicas de este documento
+### Rust (Cargo.toml) — Dependencies specific to this document
 
-| Crate | Versión | Propósito |
-|---|---|---|
-| tree-sitter | 0.26.3 | Parser AST incremental para fragmentación de código |
-| tree-sitter-typescript | 0.23.2 | Gramática TypeScript/TSX para tree-sitter |
-| tree-sitter-rust | 0.23.2 | Gramática Rust para tree-sitter |
-| tree-sitter-javascript | 0.23.1 | Gramática JavaScript para tree-sitter |
-| notify | 8.2.0 | Watcher de filesystem cross-platform (eventos de cambio) |
-| ort | 2.0.0-rc.11 | ONNX Runtime bindings — inferencia local de embeddings |
-| lancedb | 0.23 | Base de datos vectorial embebida, sin servidor |
-| arrow | 57.2 | Formato columnar para intercambio con LanceDB |
-| sha2 | 0.10.9 | Hash SHA-256 para detección de cambios |
+| Crate                  | Version     | Purpose                                           |
+| ---------------------- | ----------- | ------------------------------------------------- |
+| tree-sitter            | 0.26.3      | Incremental AST parser for code fragmentation     |
+| tree-sitter-typescript | 0.23.2      | TypeScript/TSX grammar for tree-sitter            |
+| tree-sitter-rust       | 0.23.2      | Rust grammar for tree-sitter                      |
+| tree-sitter-javascript | 0.23.1      | JavaScript grammar for tree-sitter                |
+| notify                 | 8.2.0       | Cross-platform filesystem watcher (change events) |
+| ort                    | 2.0.0-rc.11 | ONNX Runtime bindings — local embedding inference |
+| lancedb                | 0.23        | Embedded vector database, serverless              |
+| arrow                  | 57.2        | Columnar format for exchange with LanceDB         |
+| sha2                   | 0.10.9      | SHA-256 hash for change detection                 |
 
-> **Nota**: Las dependencias compartidas con el núcleo de AOP (tauri, sqlx, serde, tokio, uuid, chrono) están definidas en `system.md` y NO se duplican aquí.
+> **Note**: Dependencies shared with the AOP core (tauri, sqlx, serde, tokio, uuid, chrono) are defined in `system.md` and are NOT duplicated here.
 
 ### Node.js (package.json) — MCP Sidecar
 
-| Paquete | Versión | Propósito |
-|---|---|---|
-| @modelcontextprotocol/sdk | ^1.26.0 | SDK oficial MCP (transporte stdio + JSON-RPC 2.0) |
-| zod | ^3.25.0 | Validación de schemas (peer dependency del SDK) |
-| typescript | ^5.7.0 | Compilador TypeScript |
+| Package                   | Version | Purpose                                           |
+| ------------------------- | ------- | ------------------------------------------------- |
+| @modelcontextprotocol/sdk | ^1.26.0 | Official MCP SDK (stdio transport + JSON-RPC 2.0) |
+| zod                       | ^3.25.0 | Schema validation (SDK peer dependency)           |
+| typescript                | ^5.7.0  | TypeScript compiler                               |
 
 ---
 
-## 1. Arquitectura del Universal MCP Bridge (Sidecar)
+## 1. Universal MCP Bridge Architecture (Sidecar)
 
-El puente MCP actúa como la capa de abstracción entre el núcleo soberano de AOP y los servidores MCP de los proyectos objetivos. Se implementa como un proceso hijo (Sidecar) para garantizar el aislamiento de fallos y la compatibilidad con el ecosistema Node.js.
+The MCP bridge acts as the abstraction layer between AOP's sovereign core and the MCP servers of target projects. It's implemented as a child process (Sidecar) to ensure fault isolation and compatibility with the Node.js ecosystem.
 
-### 1.1 Protocolo de Transporte y Serialización
+### 1.1 Transport Protocol and Serialization
 
-- **Transporte**: stdio (entrada/salida estándar) utilizando pipes bidireccionales.
-- **Formato de Mensaje**: JSON-RPC 2.0.
-- **Concurrencia**: `Promise.allSettled` para procesar múltiples llamadas de herramientas simultáneas desde el pool de agentes.
+- **Transport**: stdio (standard input/output) using bidirectional pipes.
+- **Message Format**: JSON-RPC 2.0.
+- **Concurrency**: `Promise.allSettled` to process multiple simultaneous tool calls from the agent pool.
 
-**Formato de mensaje (request)**:
+**Message format (request)**:
 
 ```json
 {
@@ -64,7 +64,7 @@ El puente MCP actúa como la capa de abstracción entre el núcleo soberano de A
 }
 ```
 
-**Formato de mensaje (response)**:
+**Message format (response)**:
 
 ```json
 {
@@ -74,14 +74,14 @@ El puente MCP actúa como la capa de abstracción entre el núcleo soberano de A
     "content": [
       {
         "type": "text",
-        "text": "// contenido del archivo..."
+        "text": "// file contents..."
       }
     ]
   }
 }
 ```
 
-**Formato de mensaje (error)**:
+**Message format (error)**:
 
 ```json
 {
@@ -98,19 +98,19 @@ El puente MCP actúa como la capa de abstracción entre el núcleo soberano de A
 }
 ```
 
-### 1.2 Capa de Seguridad Zero-Trust
+### 1.2 Zero-Trust Security Layer
 
-El puente no confía en las instrucciones del agente. Se implementan los siguientes validadores:
+The bridge doesn't trust agent instructions. The following validators are implemented:
 
 **Scope Guardian** (Path Sanitizer):
-- Toda ruta recibida se normaliza con `path.resolve()`.
-- Si el resultado queda fuera del directorio raíz del proyecto, la operación se aborta con error `SECURITY_VIOLATION`.
-- **Protección contra symlinks**: Antes de resolver, se ejecuta `fs.realpathSync()` para detectar symlinks que apunten fuera del proyecto. Si `realpath !== resolvedPath`, se bloquea la operación.
-- Rutas con `..`, `~`, o caracteres nulos se rechazan antes de normalizar.
+- Every received path is normalized with `path.resolve()`.
+- If the result falls outside the project's root directory, the operation is aborted with `SECURITY_VIOLATION` error.
+- **Symlink protection**: Before resolving, `fs.realpathSync()` is executed to detect symlinks pointing outside the project. If `realpath !== resolvedPath`, the operation is blocked.
+- Paths with `..`, `~`, or null characters are rejected before normalization.
 
 **Tool Sandbox**:
-- Solo se exponen herramientas declaradas explícitamente en `aop_config.json` del proyecto.
-- Schema del archivo:
+- Only tools explicitly declared in the project's `aop_config.json` are exposed.
+- File schema:
 
 ```json
 {
@@ -134,21 +134,21 @@ El puente no confía en las instrucciones del agente. Se implementan los siguien
 ```
 
 **Rate Limiter**:
-- Máximo de llamadas MCP por minuto configurable (default: 120).
-- Máximo de llamadas concurrentes configurable (default: 10).
-- Si se excede el límite, las llamadas se encolan con backpressure. Si la cola supera 50 items, se devuelve error `RATE_LIMIT_EXCEEDED`.
+- Configurable maximum MCP calls per minute (default: 120).
+- Configurable maximum concurrent calls (default: 10).
+- If the limit is exceeded, calls are queued with backpressure. If the queue exceeds 50 items, `RATE_LIMIT_EXCEEDED` error is returned.
 
 **Circuit Breaker**:
-- Si un servidor MCP falla 5 veces consecutivas, se abre el circuito por 30 segundos.
-- Durante el circuito abierto, todas las llamadas a ese servidor devuelven error `SERVER_UNAVAILABLE` sin intentar conexión.
-- Después de 30s, se permite 1 llamada de prueba (half-open). Si tiene éxito, se cierra el circuito.
+- If an MCP server fails 5 consecutive times, the circuit opens for 30 seconds.
+- During the open circuit, all calls to that server return `SERVER_UNAVAILABLE` error without attempting connection.
+- After 30s, 1 test call is allowed (half-open). If successful, the circuit closes.
 
-**Inmutable Read**:
-- Por defecto, todas las operaciones en Fases 1-4 son de solo lectura.
-- Los permisos de escritura se activan únicamente tras la validación de Shadow Testing.
-- El campo `security.write_enabled` en `aop_config.json` controla esto explícitamente.
+**Immutable Read**:
+- By default, all operations in Phases 1-4 are read-only.
+- Write permissions are activated only after Shadow Testing validation.
+- The `security.write_enabled` field in `aop_config.json` explicitly controls this.
 
-### 1.3 Ciclo de Vida del Sidecar
+### 1.3 Sidecar Lifecycle
 
 ```
 ┌─────────┐    ┌───────────┐    ┌───────────┐    ┌──────────┐
@@ -161,131 +161,190 @@ El puente no confía en las instrucciones del agente. Se implementan los siguien
   process       (3s timeout)     (with heartbeat)  SIGKILL
 ```
 
-**Fases detalladas**:
+**Detailed phases**:
 
-1. **Init**: Tauri invoca el binario sidecar al arrancar la aplicación via `Command::new().stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped())`.
+1. **Init**: Tauri invokes the sidecar binary at application startup via `Command::new().stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped())`.
 
-2. **Handshake**: El sidecar envía un evento `mcp_ready` con la lista de herramientas disponibles.
-   - **Timeout**: Si no se recibe `mcp_ready` en 3 segundos, se reintenta el spawn (máximo 3 intentos).
-   - **Fallback**: Si después de 3 intentos no hay handshake, se emite evento `mcp_failed` al frontend con el error.
+2. **Handshake**: The sidecar sends an `mcp_ready` event with the list of available tools.
+   - **Timeout**: If `mcp_ready` is not received within 3 seconds, spawn is retried (maximum 3 attempts).
+   - **Fallback**: If after 3 attempts there's no handshake, an `mcp_failed` event is emitted to the frontend with the error.
 
-3. **Execution**: El núcleo de Rust despacha comandos JSON-RPC via stdin/stdout del proceso hijo.
+3. **Execution**: The Rust core dispatches JSON-RPC commands via stdin/stdout of the child process.
 
-4. **Heartbeat**: Cada 15 segundos, el núcleo envía un ping al sidecar. Si no hay respuesta en 5 segundos, se considera el sidecar muerto y se ejecuta el flujo de recuperación:
-   - Log del estado al momento del fallo.
-   - Kill del proceso zombie (SIGKILL).
-   - Re-spawn automático (máximo 3 intentos por sesión).
-   - Si el re-spawn falla, se notifica al usuario via el frontend.
+4. **Heartbeat**: Every 15 seconds, the core sends a ping to the sidecar. If there's no response within 5 seconds, the sidecar is considered dead and the recovery flow executes:
+   - Log the state at the moment of failure.
+   - Kill the zombie process (SIGKILL).
+   - Automatic re-spawn (maximum 3 attempts per session).
+   - If re-spawn fails, notify the user via the frontend.
 
-5. **Shutdown**: Al cerrar AOP:
-   - Se envía señal SIGTERM al sidecar.
-   - Se espera 3 segundos para cierre limpio.
-   - Si no responde, SIGKILL para evitar procesos huérfanos.
-   - Se limpian los pipes de stdin/stdout/stderr.
-
----
-
-## 2. Motor de Indexación Vectorial (Semantic Engine)
-
-El motor vectorial proporciona la "Memoria a Largo Plazo" necesaria para que los agentes comprendan la arquitectura del código sin necesidad de leer todos los archivos en cada turno.
-
-### 2.1 Estrategia de Fragmentación AST-Aware
-
-A diferencia del chunking basado en caracteres, AOP descompone el código basándose en su estructura lógica utilizando `tree-sitter` (v0.26.3).
-
-**Niveles de Granularidad**:
-
-| Nivel | Nodos AST capturados | Ejemplo |
-|---|---|---|
-| **Funcional** | `function_declaration`, `method_definition`, `arrow_function`, `constructor` | `async function fetchUser(id: string) { ... }` |
-| **Estructural** | `class_declaration`, `interface_declaration`, `type_alias_declaration`, `enum_declaration` | `interface UserRepository { ... }` |
-| **Dependencia** | `import_statement`, `export_statement`, `export_default` | `import { UserService } from './services'` |
-
-**Reglas de fragmentación**:
-- Fragmento máximo: 500 tokens (estimado). Si un nodo AST excede este límite, se subdivide por nodos hijos directos.
-- Fragmento mínimo: 50 tokens. Nodos menores se agrupan con su nodo padre.
-- Cada fragmento incluye 2 líneas de contexto (antes y después) para mantener coherencia.
-- Los comentarios JSDoc/TSDoc se adjuntan al nodo que documentan, nunca se separan.
-
-**Gramáticas soportadas en v1**:
-- TypeScript/TSX (`tree-sitter-typescript` 0.23.2)
-- JavaScript/JSX (`tree-sitter-javascript` 0.23.1)
-- Rust (`tree-sitter-rust` 0.23.2)
-- JSON (`tree-sitter-json` 0.24.8)
-- CSS (`tree-sitter-css` 0.23.2)
-- Markdown (`tree-sitter-markdown` 0.4.1)
-
-### 2.2 Pipeline de Ingestión y Embeddings
-
-**Modelos soportados**:
-
-| Modelo | Dimensiones | Tipo | Max Tokens | Uso |
-|---|---|---|---|---|
-| BGE-M3 (BAAI/bge-m3) | 1024 | Local via ONNX (`ort` crate) | 8192 | Default. Sin internet requerido. |
-| text-embedding-3-small (OpenAI) | 1536 | Cloud API | 8191 | Fallback cuando ONNX falla o para mayor precisión. |
-
-**Estrategia de fallback**:
-1. Se intenta generar el embedding con BGE-M3 local.
-2. Si ONNX falla (modelo corrupto, sin memoria, etc.), se cae al modelo cloud.
-3. Si el cloud no está disponible (sin internet), el fragmento se encola en un buffer persistente (`pending_embeddings` table en SQLite).
-4. Al detectar conectividad, se procesan los embeddings pendientes en batch.
-5. **Batch size**: 32 fragmentos por llamada (local) / 16 fragmentos por llamada (cloud, para respetar rate limits de OpenAI).
-
-**Frecuencia de actualización**:
-- Basada en eventos del filesystem usando `notify` crate (v8.2.0).
-- Solo se re-indexan archivos cuyo hash SHA-256 haya cambiado desde la última indexación.
-- Debounce de 500ms para evitar re-indexaciones durante saves rápidos (ej: auto-save del IDE).
-- Los archivos en `.gitignore`, `node_modules`, `target/`, `dist/`, y `build/` se excluyen automáticamente.
-
-**Fórmula de Relevancia (Retrieval)**:
-
-La puntuación de relevancia `S(c, q)` para un fragmento `c` dada una consulta `q` se define como:
-
-```
-S(c, q) = α · cosine_sim(embed(c), embed(q)) + (1 - α) · decay(c)
-```
-
-Donde:
-- `α = 0.85` (prioridad semántica sobre recencia, configurable)
-- `cosine_sim()` = similitud coseno entre los vectores de embedding del fragmento y la consulta
-- `decay(c) = exp(-λ · days_since_modified(c))` donde `λ = 0.05` (factor de decaimiento temporal)
-- `days_since_modified(c)` = días desde la última modificación del archivo fuente
-
-> **Efecto práctico**: Un archivo modificado hace 1 día tiene decay ≈ 0.95. Un archivo sin tocar en 30 días tiene decay ≈ 0.22. Esto prioriza código activo sobre código legacy sin eliminar contexto histórico.
-
-### 2.3 Esquema de Persistencia (LanceDB v0.23)
-
-**Ubicación**: `/artifacts/{appId}/public/data/vector_store/`
-
-| Campo | Tipo | Función |
-|---|---|---|
-| `id` | `string` (UUID v4) | Identificador único del fragmento. Primary key. |
-| `vector` | `float32[N]` | Representación latente. N=1024 (BGE-M3) o N=1536 (text-embedding-3-small). |
-| `content` | `string` | Código fuente original (truncado a 2000 chars si excede). |
-| `language` | `string` | Lenguaje de programación (`typescript`, `rust`, `javascript`, etc). |
-| `embedding_model` | `string` | Modelo usado para generar el vector (`bge-m3` o `text-embedding-3-small`). |
-| `metadata.path` | `string` | Ruta relativa al archivo desde la raíz del proyecto. |
-| `metadata.range` | `struct { start_line: u32, end_line: u32 }` | Líneas de inicio y fin del fragmento. |
-| `metadata.node_type` | `string` | Categoría del nodo AST (ej. `method_definition`, `class_declaration`). |
-| `metadata.hash` | `string` | Hash SHA-256 del archivo al momento de indexación. |
-| `metadata.parent_node` | `string \| null` | Nombre del nodo padre (ej. nombre de la clase que contiene el método). |
-| `indexed_at` | `timestamp` | Fecha/hora de indexación (UTC). |
-| `file_modified_at` | `timestamp` | Fecha/hora de última modificación del archivo fuente. Usado para `decay()`. |
-
-**Manejo de dimensiones duales**:
-
-El esquema soporta vectores de diferente dimensión según el modelo de embedding. Cuando se cambia de modelo, los vectores existentes del modelo anterior se marcan como `stale` y se re-procesan en background. No se mezclan vectores de diferentes modelos en una misma búsqueda — el campo `embedding_model` filtra antes de calcular similitud.
-
-**Índice ANN**:
-- Tipo: IVF-PQ (Inverted File Index con Product Quantization).
-- `nprobe`: 20 (particiones a buscar en query time).
-- Se reconstruye el índice automáticamente cuando el número de fragmentos crece más de 20% desde la última construcción.
+5. **Shutdown**: When closing AOP:
+   - SIGTERM signal is sent to the sidecar.
+   - Wait 3 seconds for clean shutdown.
+   - If it doesn't respond, SIGKILL to avoid orphan processes.
+   - Clean up stdin/stdout/stderr pipes.
 
 ---
 
-## 3. Interfaz de Integración (Rust ↔ Sidecar ↔ Vector)
+## 2. Vector Indexing Engine (Semantic Engine)
 
-### 3.1 Tipos de Datos (Rust Structs)
+The vector engine provides the "Long-Term Memory" necessary for agents to understand code architecture without needing to read all files on each turn.
+
+### 2.1 AST-Aware Fragmentation Strategy
+
+Unlike character-based chunking, AOP decomposes code based on its logical structure using `tree-sitter` (v0.26.3).
+
+**Granularity Levels**:
+
+| Level          | Captured AST Nodes                                           | Example                                  |
+| -------------- | ------------------------------------------------------------ | ---------------------------------------- |
+| L1: Symbol     | function, class, interface, type_alias, variable declaration | `function getUserData(id: string) {...}` |
+| L2: Block      | if_statement, for_statement, try_statement, export_statement | `export const config = {...}`            |
+| L3: Expression | call_expression, object_expression, arrow_function           | `users.map(u => u.id)`                   |
+
+**Fragmentation Algorithm**:
+
+```
+For each file:
+  1. Parse with tree-sitter → AST
+  2. Traverse depth-first
+  3. For each node:
+     - If level L1 → create fragment (with full text of node)
+     - If level L2 AND parent is not L1 → create fragment
+     - If level L3 AND standalone → create fragment
+  4. Deduplicate overlapping fragments (keep the most specific)
+  5. Add metadata:
+     - start_line, end_line, start_char, end_char
+     - language (ts/tsx/js/jsx/rs)
+     - parent_symbol (if nested)
+     - imports (from file header)
+```
+
+### 2.2 Dual Embedding Model
+
+**Local Model (Offline Priority)**:
+- Model: `BAAI/bge-m3` (ONNX int8 quantization, ~543MB).
+- Dimensions: 1024.
+- Latency: ~15ms per fragment on Ryzen 7 5800X.
+- Languages: 100+.
+- Max tokens: 8192.
+
+**Cloud Model (Fallback)**:
+- Model: `text-embedding-3-small` (OpenAI).
+- Dimensions: 1536.
+- Latency: ~80ms per fragment (with API call).
+- Used when: local model fails or when reindexing >1000 files (parallel batching).
+
+**Fallback Logic**:
+
+```
+Try local model
+    │
+    ├── Success → insert embedding into LanceDB
+    │
+    └── Failure (OOM, crash, etc.)
+        │
+        └── Try cloud model
+            │
+            ├── Success → insert embedding
+            │
+            └── Failure (no internet, quota exceeded)
+                │
+                └── Add to pending_embeddings queue
+                    │
+                    └── Retry every 5 minutes
+```
+
+### 2.3 LanceDB Schema
+
+```rust
+struct CodeChunk {
+    id: String,              // UUID v7
+    file_path: String,       // Relative to project root
+    language: String,        // "typescript" | "rust" | "javascript"
+    content: String,         // The code fragment
+    start_line: u32,
+    end_line: u32,
+    parent_symbol: Option<String>, // e.g. "class User" if nested
+    imports: Vec<String>,    // Only direct imports from the file
+    embedding: Vec<f32>,     // 1024 dims (BGE-M3) or 1536 (OpenAI)
+    embedding_model: String, // "bge-m3-onnx" | "text-embedding-3-small"
+    created_at: i64,         // Unix timestamp
+    file_modified_at: i64,   // mtime of the source file
+    hash: String,            // SHA-256 of content (for staleness detection)
+}
+```
+
+**Indexes**:
+- ANN index on `embedding` using IVF-PQ (Inverted File with Product Quantization).
+- B-tree index on `file_path` for fast invalidation on file changes.
+- B-tree index on `hash` for duplicate detection.
+
+### 2.4 Incremental Reindexing
+
+**Filesystem Watcher** (`notify` v8.2.0):
+- Listens to `Create`, `Modify`, `Remove`, `Rename` events in the project directory.
+- **Debounce**: Groups events that occur within 500ms to avoid redundant reindexing (e.g., when an IDE saves multiple times).
+- **Ignored paths**: `node_modules`, `.git`, `dist`, `build` (configurable in `aop_config.json`).
+
+**Reindex Logic**:
+
+```
+File modified event detected
+    │
+    ▼
+Compute SHA-256 of new content
+    │
+    ▼
+Query LanceDB: SELECT * WHERE file_path = ? AND hash = ?
+    │
+    ├── Hash matches → ignore (no real change, just touch)
+    │
+    └── Hash differs → proceed
+        │
+        ▼
+    Delete old chunks for that file_path
+        │
+        ▼
+    Fragment + embed + insert new chunks
+        │
+        ▼
+    Emit event "file_reindexed" to frontend
+```
+
+**Performance Optimizations**:
+- Parallelized with tokio (up to 4 files simultaneously).
+- If >50 files change simultaneously (e.g., git checkout), they're queued and processed in batches of 10.
+- Priority queue: Files currently open in the editor have priority.
+
+### 2.5 Semantic Search
+
+**Relevance Formula**:
+
+```
+S(c, q) = cos(emb(c), emb(q)) × freshness(c) × lang_boost(c, q)
+
+where:
+  - cos() = cosine similarity between embeddings
+  - freshness(c) = e^(-days_old / 30)  // exponential decay
+  - lang_boost(c, q) = 1.2 if language matches agent's context, else 1.0
+```
+
+**Search Algorithm**:
+
+```
+1. Embed the query with the same model used for chunks (BGE-M3 local).
+2. LanceDB.search(embedding_query, top_k=20)
+   - Uses ANN (Approximate Nearest Neighbor) with IVF-PQ.
+   - Latency: ~50ms for 100k chunks, ~100ms for 1M chunks.
+3. Re-rank the 20 candidates using the full S(c, q) formula.
+4. Return top_k=5 to the agent.
+```
+
+---
+
+## 3. Rust Core Interfaces
+
+### 3.1 Shared Data Types
 
 ```rust
 use serde::{Deserialize, Serialize};
@@ -293,27 +352,20 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextChunk {
     pub id: String,
-    pub content: String,
+    pub file_path: String,
     pub language: String,
-    pub score: f32,
-    pub metadata: ChunkMetadata,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChunkMetadata {
-    pub path: String,
+    pub content: String,
     pub start_line: u32,
     pub end_line: u32,
-    pub node_type: String,
-    pub parent_node: Option<String>,
-    pub hash: String,
-    pub file_modified_at: String, // ISO 8601
+    pub relevance_score: f32,  // 0.0 to 1.0
+    pub parent_symbol: Option<String>,
+    pub imports: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpToolRequest {
-    pub server_id: String,
-    pub tool: String,
+    pub server_id: String,  // "filesystem", "database", etc.
+    pub tool_name: String,
     pub args: serde_json::Value,
 }
 
@@ -351,7 +403,7 @@ pub struct SidecarHealth {
 }
 ```
 
-### 3.2 Comandos de Tauri (API Interna)
+### 3.2 Tauri Commands (Internal API)
 
 ```rust
 // === Vector Engine ===
@@ -360,7 +412,7 @@ pub struct SidecarHealth {
 async fn query_context(
     query: String,
     top_k: Option<u32>,       // default: 5
-    language: Option<String>,  // filtro opcional por lenguaje
+    language: Option<String>,  // optional language filter
 ) -> Result<Vec<ContextChunk>, String>;
 
 #[tauri::command]
@@ -387,129 +439,129 @@ async fn get_sidecar_health() -> Result<SidecarHealth, String>;
 async fn restart_sidecar() -> Result<(), String>;
 ```
 
-### 3.3 Lógica de Recuperación de Agente
+### 3.3 Agent Recovery Logic
 
-Flujo completo cuando un agente (Tier 2/3) necesita contexto:
+Complete flow when an agent (Tier 2/3) needs context:
 
 ```
-Agente genera consulta semántica
+Agent generates semantic query
         │
         ▼
-Vector Engine: buscar top_k=5 fragmentos más relevantes
+Vector Engine: search for top_k=5 most relevant fragments
         │
         ▼
-MCP Bridge: verificar si los archivos fuente han cambiado
-  (comparar metadata.hash vs SHA-256 actual del archivo en disco)
+MCP Bridge: verify if source files have changed
+  (compare metadata.hash vs current file's SHA-256 on disk)
         │
-        ├── Sin cambios → Usar fragmentos del índice directamente
+        ├── No changes → Use index fragments directly
         │
-        └── Con cambios → target_read en tiempo real
+        └── With changes → target_read in real-time
                 │
                 ▼
-            Re-indexar el archivo cambiado (async, no bloquea)
+            Re-index the changed file (async, non-blocking)
                 │
                 ▼
-            Hidratar contexto con contenido fresco
+            Hydrate context with fresh content
                 │
                 ▼
-            Enviar al LLM con los fragmentos actualizados
+            Send to LLM with updated fragments
 ```
 
-**Reglas de hidratación**:
-- Si más de 3 de los 5 fragmentos están stale, se hace un re-index completo del directorio afectado.
-- El contexto hidratado incluye siempre: el fragmento + 2 líneas antes/después + la declaración de imports del archivo.
-- El tamaño total del contexto inyectado no debe superar 8000 tokens por turno de agente.
+**Hydration Rules**:
+- If more than 3 of the 5 fragments are stale, perform a complete re-index of the affected directory.
+- Hydrated context always includes: the fragment + 2 lines before/after + the file's import declarations.
+- Total injected context size must not exceed 8000 tokens per agent turn.
 
 ---
 
-## 4. Manejo de Errores
+## 4. Error Handling
 
-### 4.1 Códigos de Error Personalizados
+### 4.1 Custom Error Codes
 
-| Código | Nombre | Descripción | Acción |
-|---|---|---|---|
-| -32001 | `SECURITY_VIOLATION` | Path fuera del proyecto o symlink malicioso | Log + abort + notificar usuario |
-| -32002 | `RATE_LIMIT_EXCEEDED` | Más de N llamadas/minuto al MCP | Encolar o rechazar |
-| -32003 | `SERVER_UNAVAILABLE` | Circuit breaker abierto para ese servidor | Reintentar después de cooldown |
-| -32004 | `TOOL_NOT_ALLOWED` | Herramienta no declarada en aop_config.json | Abort silencioso |
-| -32005 | `SIDECAR_DEAD` | Sidecar no responde al heartbeat | Re-spawn automático |
-| -32006 | `INDEX_STALE` | Más del 50% del índice está desactualizado | Re-index en background |
-| -32007 | `EMBEDDING_FAILED` | Modelo local y cloud fallaron | Encolar en pending_embeddings |
-| -32008 | `WRITE_DENIED` | Intento de escritura en modo read-only | Abort + log |
+| Code   | Name                  | Description                               | Action                      |
+| ------ | --------------------- | ----------------------------------------- | --------------------------- |
+| -32001 | `SECURITY_VIOLATION`  | Path outside project or malicious symlink | Log + abort + notify user   |
+| -32002 | `RATE_LIMIT_EXCEEDED` | More than N calls/minute to MCP           | Queue or reject             |
+| -32003 | `SERVER_UNAVAILABLE`  | Circuit breaker open for that server      | Retry after cooldown        |
+| -32004 | `TOOL_NOT_ALLOWED`    | Tool not declared in aop_config.json      | Silent abort                |
+| -32005 | `SIDECAR_DEAD`        | Sidecar not responding to heartbeat       | Automatic re-spawn          |
+| -32006 | `INDEX_STALE`         | More than 50% of index is outdated        | Background re-index         |
+| -32007 | `EMBEDDING_FAILED`    | Both local and cloud models failed        | Queue in pending_embeddings |
+| -32008 | `WRITE_DENIED`        | Write attempt in read-only mode           | Abort + log                 |
 
-### 4.2 Estrategia de Reintentos
+### 4.2 Retry Strategy
 
 ```
-Intento 1 → espera 0ms (inmediato)
-Intento 2 → espera 500ms
-Intento 3 → espera 2000ms (backoff exponencial)
-Intento 4+ → No reintentar. Emitir error al agente.
+Attempt 1 → wait 0ms (immediate)
+Attempt 2 → wait 500ms
+Attempt 3 → wait 2000ms (exponential backoff)
+Attempt 4+ → Don't retry. Emit error to agent.
 ```
 
-Los errores `SECURITY_VIOLATION`, `TOOL_NOT_ALLOWED` y `WRITE_DENIED` **nunca** se reintentan.
+Errors `SECURITY_VIOLATION`, `TOOL_NOT_ALLOWED` and `WRITE_DENIED` are **never** retried.
 
 ---
 
-## 5. Roadmap de Implementación
+## 5. Implementation Roadmap
 
-### Fase 1: Cimientos de Comunicación
+### Phase 1: Communication Foundations
 
-- [ ] Implementar el Sidecar en Node.js usando `@modelcontextprotocol/sdk` v1.26.0 con transporte stdio.
-- [ ] Configurar el `command_handler` en Rust para gestionar stdin/stdout/stderr del Sidecar.
-- [ ] Implementar el handshake inicial con timeout de 3s y 3 reintentos.
-- [ ] Implementar el heartbeat (ping cada 15s, timeout 5s).
-- [ ] Implementar el Scope Guardian con protección contra symlinks.
-- [ ] Implementar el Rate Limiter (120 calls/min default).
-- [ ] Crear el schema de `aop_config.json` y su parser/validador.
-
-**Done when**:
-- El sidecar arranca, hace handshake, y responde a llamadas `tools/call` desde Rust.
-- Un path malicioso (ej: `../../etc/passwd`) es bloqueado y loggeado.
-- El sidecar se recupera automáticamente después de un kill manual.
-- El rate limiter bloquea la llamada #121 en un minuto.
-
-### Fase 2: Inteligencia Semántica
-
-- [ ] Integrar `tree-sitter` v0.26.3 en el worker de indexación de Rust con gramáticas TS/JS/Rust.
-- [ ] Implementar la lógica de fragmentación AST-aware con los 3 niveles de granularidad.
-- [ ] Configurar LanceDB v0.23 con el esquema completo (incluyendo `id`, `language`, `embedding_model`, `file_modified_at`).
-- [ ] Implementar el servicio de embeddings dual (BGE-M3 local + text-embedding-3-small cloud).
-- [ ] Implementar el fallback automático local → cloud → cola pendiente.
-- [ ] Implementar el watcher de filesystem con `notify` v8.2.0 y debounce de 500ms.
-- [ ] Implementar la fórmula de relevancia `S(c, q)` con decay temporal.
+- [ ] Implement Sidecar in Node.js using `@modelcontextprotocol/sdk` v1.26.0 with stdio transport.
+- [ ] Configure `command_handler` in Rust to manage Sidecar's stdin/stdout/stderr.
+- [ ] Implement initial handshake with 3s timeout and 3 retries.
+- [ ] Implement heartbeat (ping every 15s, 5s timeout).
+- [ ] Implement Scope Guardian with symlink protection.
+- [ ] Implement Rate Limiter (120 calls/min default).
+- [ ] Create `aop_config.json` schema and its parser/validator.
 
 **Done when**:
-- Un repositorio TypeScript de 200+ archivos se indexa en menos de 30 segundos.
-- Una búsqueda semántica retorna 5 fragmentos relevantes en menos de 100ms.
-- Al modificar un archivo, se re-indexa automáticamente sin intervención del usuario.
-- Si se desconecta internet, los embeddings se encolan y se procesan al reconectar.
+- Sidecar starts, handshakes, and responds to `tools/call` from Rust.
+- A malicious path (e.g., `../../etc/passwd`) is blocked and logged.
+- Sidecar automatically recovers after a manual kill.
+- Rate limiter blocks call #121 within a minute.
 
-### Fase 3: Orquestación de Swarm
+### Phase 2: Semantic Intelligence
 
-- [ ] Crear el "Context Provider" en React que visualice qué fragmentos de código están alimentando al agente en tiempo real.
-- [ ] Implementar el Circuit Breaker para servidores MCP.
-- [ ] Realizar pruebas de estrés con repositorios de >5,000 archivos para optimizar la latencia de búsqueda ANN.
-- [ ] Implementar la lógica de re-hidratación de contexto (sección 3.3).
-- [ ] Implementar métricas de observabilidad: latencia de embedding, hit rate del índice, frecuencia de re-index.
+- [ ] Integrate `tree-sitter` v0.26.3 in Rust indexing worker with TS/JS/Rust grammars.
+- [ ] Implement AST-aware fragmentation logic with 3 granularity levels.
+- [ ] Configure LanceDB v0.23 with complete schema (including `id`, `language`, `embedding_model`, `file_modified_at`).
+- [ ] Implement dual embedding service (BGE-M3 local + text-embedding-3-small cloud).
+- [ ] Implement automatic fallback local → cloud → pending queue.
+- [ ] Implement filesystem watcher with `notify` v8.2.0 and 500ms debounce.
+- [ ] Implement relevance formula `S(c, q)` with temporal decay.
 
 **Done when**:
-- Un repositorio de 5,000+ archivos mantiene latencia de búsqueda < 200ms.
-- El Circuit Breaker se abre después de 5 fallos consecutivos y se recupera después de 30s.
-- El Context Provider muestra en tiempo real los fragmentos que el agente está usando.
-- Las métricas de observabilidad están disponibles en el dashboard de AOP.
+- A TypeScript repository with 200+ files indexes in less than 30 seconds.
+- A semantic search returns 5 relevant fragments in less than 100ms.
+- When modifying a file, it re-indexes automatically without user intervention.
+- If internet disconnects, embeddings are queued and processed upon reconnection.
+
+### Phase 3: Swarm Orchestration
+
+- [ ] Create "Context Provider" in React that visualizes which code fragments are feeding the agent in real-time.
+- [ ] Implement Circuit Breaker for MCP servers.
+- [ ] Perform stress tests with repositories of >5,000 files to optimize ANN search latency.
+- [ ] Implement context re-hydration logic (section 3.3).
+- [ ] Implement observability metrics: embedding latency, index hit rate, re-index frequency.
+
+**Done when**:
+- A repository with 5,000+ files maintains search latency < 200ms.
+- Circuit Breaker opens after 5 consecutive failures and recovers after 30s.
+- Context Provider shows in real-time the fragments the agent is using.
+- Observability metrics are available in AOP dashboard.
 
 ---
 
-## 6. Decisiones de Arquitectura (ADRs)
+## 6. Architecture Decision Records (ADRs)
 
-**ADR-001: ¿Por qué Sidecar en Node.js y no Rust puro?**
-El SDK oficial de MCP (`@modelcontextprotocol/sdk`) es TypeScript-first. Implementar el protocolo MCP desde cero en Rust requeriría reimplementar JSON-RPC 2.0, el handshake, y todos los tipos. El costo de mantenimiento sería alto y la compatibilidad con servidores MCP existentes no estaría garantizada. El sidecar en Node.js es la opción pragmática.
+**ADR-001: Why Sidecar in Node.js and not pure Rust?**
+The official MCP SDK (`@modelcontextprotocol/sdk`) is TypeScript-first. Implementing the MCP protocol from scratch in Rust would require reimplementing JSON-RPC 2.0, handshake, and all types. Maintenance cost would be high and compatibility with existing MCP servers wouldn't be guaranteed. The Node.js sidecar is the pragmatic choice.
 
-**ADR-002: ¿Por qué LanceDB y no Qdrant/Milvus?**
-LanceDB es embebido (sin servidor), se integra nativamente con Arrow (que ya usamos), y escala a millones de vectores en disco. Qdrant y Milvus requieren un servidor separado, lo cual contradice la filosofía de AOP de ser una aplicación desktop autónoma.
+**ADR-002: Why LanceDB and not Qdrant/Milvus?**
+LanceDB is embedded (serverless), integrates natively with Arrow (which we already use), and scales to millions of vectors on disk. Qdrant and Milvus require a separate server, which contradicts AOP's philosophy of being a standalone desktop application.
 
-**ADR-003: ¿Por qué BGE-M3 como modelo local default?**
-BGE-M3 soporta 100+ idiomas, procesa hasta 8192 tokens, y produce embeddings de 1024 dimensiones (más ligero que los 1536 de OpenAI). El modelo ONNX pesa ~543MB en int8, lo cual es aceptable para una aplicación desktop. Su rendimiento en benchmarks de code retrieval es competitivo con modelos cloud.
+**ADR-003: Why BGE-M3 as the default local model?**
+BGE-M3 supports 100+ languages, processes up to 8192 tokens, and produces 1024-dimensional embeddings (lighter than OpenAI's 1536). The ONNX model weighs ~543MB in int8, which is acceptable for a desktop application. Its performance in code retrieval benchmarks is competitive with cloud models.
 
-**ADR-004: ¿Por qué tree-sitter y no regex/líneas para fragmentar?**
-El chunking por líneas o regex pierde la estructura semántica del código. Un método partido a la mitad es inútil para un agente. tree-sitter produce un AST real que permite cortar por fronteras lógicas (funciones, clases, interfaces). El costo adicional de parsing es ~6ms por archivo de 2000 líneas.
+**ADR-004: Why tree-sitter and not regex/lines for fragmentation?**
+Chunking by lines or regex loses the semantic structure of code. A method split in half is useless to an agent. tree-sitter produces a real AST that allows cutting at logical boundaries (functions, classes, interfaces). The additional parsing cost is ~6ms per 2000-line file.

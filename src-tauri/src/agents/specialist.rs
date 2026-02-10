@@ -17,6 +17,10 @@ pub struct SpecialistTask {
     pub target_files: Vec<String>,
     pub code_context: Vec<CodeBlock>,
     pub constraints: Vec<String>,
+    #[serde(default)]
+    pub model_provider: Option<String>,
+    #[serde(default)]
+    pub model_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,16 +46,23 @@ pub fn run_specialist_task(
     let agent_uid = Uuid::new_v4().to_string();
     let proposal_id = Uuid::new_v4().to_string();
     let file_path = resolve_target_file(task);
+    let model_tag = model_tag(task);
     let intent_description = format!(
-        "{} proposal for {}: {}",
+        "{}{} proposal for {}: {}",
         task.persona,
+        model_tag,
         file_path,
         task.objective.trim()
     );
     let intent_hash = hash_intent_embedding(&intent_description);
     let confidence = estimate_confidence(task, target_file_content);
     let tokens_used = estimate_tokens_used(task, target_file_content);
-    let note_line = build_note_line(&task.persona, &task.objective, &file_path);
+    let note_line = build_note_line(
+        &task.persona,
+        task.model_id.as_deref(),
+        &task.objective,
+        &file_path,
+    );
     let diff_content = build_unified_diff(&file_path, &note_line, target_file_content);
 
     Ok(DiffProposal {
@@ -92,8 +103,32 @@ fn validate_specialist_task(task: &SpecialistTask) -> Result<(), String> {
     if task.token_budget == 0 {
         return Err("tokenBudget must be greater than 0".to_string());
     }
+    if task
+        .model_provider
+        .as_ref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        return Err("modelProvider must not be empty when provided".to_string());
+    }
+    if task
+        .model_id
+        .as_ref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        return Err("modelId must not be empty when provided".to_string());
+    }
+    if task.model_provider.is_some() ^ task.model_id.is_some() {
+        return Err("modelProvider and modelId must be provided together".to_string());
+    }
 
     Ok(())
+}
+
+fn model_tag(task: &SpecialistTask) -> String {
+    match (task.model_provider.as_deref(), task.model_id.as_deref()) {
+        (Some(provider), Some(model_id)) => format!(" [{}:{}]", provider.trim(), model_id.trim()),
+        _ => String::new(),
+    }
 }
 
 fn resolve_target_file(task: &SpecialistTask) -> String {
@@ -154,7 +189,12 @@ fn estimate_tokens_used(task: &SpecialistTask, target_file_content: Option<&str>
         .max(40)
 }
 
-fn build_note_line(persona: &str, objective: &str, file_path: &str) -> String {
+fn build_note_line(
+    persona: &str,
+    model_id: Option<&str>,
+    objective: &str,
+    file_path: &str,
+) -> String {
     let compact_objective = objective
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -163,7 +203,12 @@ fn build_note_line(persona: &str, objective: &str, file_path: &str) -> String {
         .take(120)
         .collect::<String>();
 
-    let note = format!("AOP({persona}): {compact_objective} [{file_path}]");
+    let model_fragment = model_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| format!(" model={value}"))
+        .unwrap_or_default();
+    let note = format!("AOP({persona}{model_fragment}): {compact_objective} [{file_path}]");
     match file_path.rsplit('.').next() {
         Some("py") => format!("# {note}"),
         Some("md") => format!("<!-- {note} -->"),
@@ -228,6 +273,8 @@ mod tests {
                 embedding: None,
             }],
             constraints: vec!["avoid regressions in loading and error states".to_string()],
+            model_provider: Some("openai".to_string()),
+            model_id: Some("gpt-5-nano".to_string()),
         }
     }
 

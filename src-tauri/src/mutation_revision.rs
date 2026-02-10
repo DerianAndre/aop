@@ -1,12 +1,14 @@
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
-use uuid::Uuid;
 
+use crate::agents::specialist::{self, SpecialistTask};
+use crate::agents::CodeBlock;
 use crate::db::metrics;
 use crate::db::mutations::{
     self, CreateMutationInput, MutationRecord, MutationStatus, UpdateMutationStatusInput,
 };
 use crate::db::tasks::{self, CreateTaskRecordInput, TaskRecord, TaskStatus};
+use crate::model_registry::ModelRegistry;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -25,6 +27,7 @@ pub struct MutationRevisionResult {
 
 pub async fn request_mutation_revision(
     pool: &SqlitePool,
+    model_registry: &ModelRegistry,
     input: RequestMutationRevisionInput,
 ) -> Result<MutationRevisionResult, String> {
     validate_input(&input)?;
@@ -51,7 +54,7 @@ pub async fn request_mutation_revision(
             parent_id: Some(parent_task.id.clone()),
             tier: 3,
             domain: parent_task.domain.clone(),
-            objective: revision_objective,
+            objective: revision_objective.clone(),
             token_budget: revision_budget,
             risk_factor: parent_task.risk_factor,
             status: TaskStatus::Pending,
@@ -59,19 +62,47 @@ pub async fn request_mutation_revision(
     )
     .await?;
 
+    let revision_model = model_registry.resolve(3, Some("revision_specialist"))?;
+    let specialist_task = SpecialistTask {
+        task_id: revised_task.id.clone(),
+        parent_id: parent_task.id.clone(),
+        tier: 3,
+        persona: "revision_specialist".to_string(),
+        objective: revision_objective.clone(),
+        token_budget: revision_budget.max(1) as u32,
+        target_files: vec![base_mutation.file_path.clone()],
+        code_context: vec![CodeBlock {
+            file_path: base_mutation.file_path.clone(),
+            start_line: 1,
+            end_line: 1,
+            content: base_mutation.diff_content.chars().take(1200).collect(),
+            embedding: None,
+        }],
+        constraints: vec![
+            "apply reviewer-requested revision".to_string(),
+            format!("reviewer_note: {}", revision_note),
+            format!(
+                "revision_model: {}/{}",
+                revision_model.provider.as_str(),
+                revision_model.model_id.as_str()
+            ),
+        ],
+        model_provider: Some(revision_model.provider.clone()),
+        model_id: Some(revision_model.model_id.clone()),
+    };
+    let proposal = specialist::run_specialist_task(&specialist_task, None)
+        .map_err(|error| format!("Failed to generate revised specialist proposal: {error}"))?;
+
     let revised_mutation = mutations::create_mutation(
         pool,
         CreateMutationInput {
             task_id: revised_task.id.clone(),
-            agent_uid: Uuid::new_v4().to_string(),
+            agent_uid: proposal.agent_uid,
             file_path: base_mutation.file_path.clone(),
-            diff_content: base_mutation.diff_content.clone(),
-            intent_description: Some(format!(
-                "Revision request based on mutation {}: {}",
-                base_mutation.id, revision_note
-            )),
-            intent_hash: None,
-            confidence: (base_mutation.confidence * 0.9).clamp(0.10, 1.0),
+            diff_content: proposal.diff_content,
+            intent_description: Some(proposal.intent_description),
+            intent_hash: Some(proposal.intent_hash),
+            confidence: (proposal.confidence as f64).clamp(0.10, 1.0),
         },
     )
     .await?;
@@ -131,10 +162,12 @@ fn revision_budget(parent_budget: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use sqlx::sqlite::SqlitePoolOptions;
+    use uuid::Uuid;
 
     use crate::db;
     use crate::db::mutations::{self, CreateMutationInput};
     use crate::db::tasks::{self, CreateTaskInput};
+    use crate::model_registry::ModelRegistry;
 
     use super::*;
 
@@ -183,8 +216,10 @@ mod tests {
         .await
         .expect("mutation should be created");
 
+        let model_registry = ModelRegistry::default();
         let result = request_mutation_revision(
             &pool,
+            &model_registry,
             RequestMutationRevisionInput {
                 mutation_id: mutation.id.clone(),
                 note: "Please isolate loading guard and keep previous behavior.".to_string(),
@@ -201,5 +236,7 @@ mod tests {
         assert_eq!(result.revised_task.tier, 3);
         assert_eq!(result.revised_mutation.task_id, result.revised_task.id);
         assert_eq!(result.revised_mutation.status, "proposed");
+        assert!(result.revised_mutation.diff_content.contains("AOP("));
+        assert_ne!(result.revised_mutation.diff_content, mutation.diff_content);
     }
 }

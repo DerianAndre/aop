@@ -2,6 +2,7 @@ mod agents;
 mod commands;
 mod db;
 mod mcp_bridge;
+mod model_registry;
 mod mutation_pipeline;
 mod mutation_revision;
 mod vector;
@@ -13,10 +14,12 @@ use sqlx::SqlitePool;
 use tauri::Manager;
 
 use mcp_bridge::client::BridgeClient;
+use model_registry::ModelRegistry;
 
 pub struct AppState {
     pub db_pool: SqlitePool,
     pub bridge_client: BridgeClient,
+    pub model_registry: ModelRegistry,
 }
 
 fn initialize_state(app: &mut tauri::App) -> Result<(), String> {
@@ -32,6 +35,7 @@ fn initialize_state(app: &mut tauri::App) -> Result<(), String> {
     let workspace_root = std::env::current_dir()
         .map_err(|error| format!("Failed to determine workspace root: {error}"))?;
     let bridge_client = BridgeClient::new(&workspace_root);
+    let model_registry = ModelRegistry::load(&workspace_root);
 
     let db_pool = tauri::async_runtime::block_on(async {
         let pool = db::connect_pool(&db_path).await?;
@@ -42,6 +46,7 @@ fn initialize_state(app: &mut tauri::App) -> Result<(), String> {
     app.manage(AppState {
         db_pool,
         bridge_client,
+        model_registry,
     });
 
     Ok(())
@@ -70,7 +75,8 @@ pub fn run() {
             commands::read_target_file,
             commands::search_target_files,
             commands::index_target_project,
-            commands::query_codebase
+            commands::query_codebase,
+            commands::get_model_registry
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

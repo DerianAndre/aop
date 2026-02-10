@@ -14,6 +14,7 @@ import type {
   ListTaskMutationsInput,
   MutationPipelineResult,
   MutationRecord,
+  ModelRegistrySnapshot,
   MutationRevisionResult,
   OrchestrationResult,
   QueryCodebaseInput,
@@ -91,4 +92,8 @@ export async function indexTargetProject(input: IndexTargetProjectInput): Promis
 
 export async function queryCodebase(input: QueryCodebaseInput): Promise<ContextChunk[]> {
   return invoke<ContextChunk[]>('query_codebase', { input })
+}
+
+export async function getModelRegistry(): Promise<ModelRegistrySnapshot> {
+  return invoke<ModelRegistrySnapshot>('get_model_registry')
 }

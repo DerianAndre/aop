@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
 use crate::db::tasks::{self, CreateTaskRecordInput, TaskRecord, TaskStatus};
+use crate::model_registry::ModelRegistry;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -48,10 +49,12 @@ struct AssignmentDraft {
 
 pub async fn orchestrate_and_persist(
     pool: &SqlitePool,
+    model_registry: &ModelRegistry,
     input: UserObjectiveInput,
 ) -> Result<OrchestrationResult, String> {
     validate_objective_input(&input)?;
 
+    let tier1_model = model_registry.resolve(1, None)?;
     let objective = input.objective.trim().to_string();
     let domain = infer_primary_domain(&objective);
     let assignment_count = desired_assignment_count(&objective);
@@ -71,7 +74,10 @@ pub async fn orchestrate_and_persist(
             parent_id: None,
             tier: 1,
             domain: domain.clone(),
-            objective: format!("Orchestrate objective: {objective}"),
+            objective: format!(
+                "Orchestrate objective: {objective} [model {}/{}]",
+                tier1_model.provider, tier1_model.model_id
+            ),
             token_budget: overhead_budget.max(1) as i64,
             risk_factor: 0.0,
             status: TaskStatus::Pending,
@@ -549,6 +555,7 @@ mod tests {
 
     use super::*;
     use crate::db;
+    use crate::model_registry::ModelRegistry;
 
     async fn setup_test_pool() -> SqlitePool {
         let pool = SqlitePoolOptions::new()
@@ -581,8 +588,10 @@ mod tests {
         )
         .expect("fixture should be written");
 
+        let model_registry = ModelRegistry::default();
         let result = orchestrate_and_persist(
             &pool,
+            &model_registry,
             UserObjectiveInput {
                 objective: "Refactor auth module".to_string(),
                 target_project: project_dir.path().to_string_lossy().to_string(),

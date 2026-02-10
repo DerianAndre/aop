@@ -258,6 +258,27 @@ export interface QueryCodebaseInput {
   topK?: number
 }
 
+export interface ModelProfile {
+  provider: string
+  modelId: string
+  temperature?: number | null
+  maxOutputTokens?: number | null
+}
+
+export interface ModelRoutingConfig {
+  version: number
+  defaultProvider: string
+  tiers: Record<string, ModelProfile>
+  personaOverrides: Record<string, ModelProfile>
+}
+
+export interface ModelRegistrySnapshot {
+  configPath: string
+  loadedFromFile: boolean
+  loadError: string | null
+  config: ModelRoutingConfig
+}
+
 export interface ContextChunk {
   id: string
   filePath: string

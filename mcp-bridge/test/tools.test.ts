@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -48,5 +48,38 @@ describe('bridge local tools', () => {
 
     expect(pathMatches.matches.some((match) => match.path === 'docs/README.md')).toBe(true)
     expect(contentMatches.matches.some((match) => match.path === 'src/main.ts')).toBe(true)
+  })
+
+  it('rejects traversal paths that include dot segments', async () => {
+    const { root } = await createFixture()
+    await expect(readFile(root, '../outside.ts')).rejects.toThrow('SECURITY_VIOLATION')
+  })
+
+  it('rejects paths that start with tilde', async () => {
+    const { root } = await createFixture()
+    await expect(listDir(root, '~/secrets')).rejects.toThrow('SECURITY_VIOLATION')
+  })
+
+  it('rejects symlink traversal when links are supported by the environment', async () => {
+    const { root } = await createFixture()
+    const outsideRoot = await mkdtemp(path.join(os.tmpdir(), 'aop-bridge-symlink-'))
+    tempRoots.push(outsideRoot)
+
+    const outsideDirectory = path.join(outsideRoot, 'outside')
+    await mkdir(outsideDirectory, { recursive: true })
+    await writeFile(path.join(outsideDirectory, 'secret.txt'), 'classified\n')
+
+    const linkPath = path.join(root, 'linked-outside')
+    try {
+      await symlink(outsideDirectory, linkPath, process.platform === 'win32' ? 'junction' : 'dir')
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (code === 'EPERM' || code === 'EACCES' || code === 'UNKNOWN') {
+        return
+      }
+      throw error
+    }
+
+    await expect(listDir(root, 'linked-outside')).rejects.toThrow('SECURITY_VIOLATION')
   })
 })

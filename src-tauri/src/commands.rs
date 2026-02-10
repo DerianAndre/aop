@@ -11,6 +11,7 @@ use crate::mcp_bridge::tool_caller::{
     self, DirectoryListing, ListTargetDirInput, ReadTargetFileInput, SearchResult,
     SearchTargetFilesInput, TargetFileContent,
 };
+use crate::model_registry::ModelRegistrySnapshot;
 use crate::mutation_pipeline::{self, MutationPipelineResult, RunMutationPipelineInput};
 use crate::mutation_revision::{self, MutationRevisionResult, RequestMutationRevisionInput};
 use crate::vector::indexer;
@@ -44,7 +45,7 @@ pub async fn orchestrate_objective(
     state: State<'_, AppState>,
     input: UserObjectiveInput,
 ) -> Result<OrchestrationResult, String> {
-    orchestrator::orchestrate_and_persist(&state.db_pool, input).await
+    orchestrator::orchestrate_and_persist(&state.db_pool, &state.model_registry, input).await
 }
 
 #[tauri::command]
@@ -52,7 +53,13 @@ pub async fn execute_domain_task(
     state: State<'_, AppState>,
     input: ExecuteDomainTaskInput,
 ) -> Result<IntentSummary, String> {
-    domain_leader::execute_domain_task(&state.db_pool, &state.bridge_client, input).await
+    domain_leader::execute_domain_task(
+        &state.db_pool,
+        &state.bridge_client,
+        &state.model_registry,
+        input,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -93,7 +100,7 @@ pub async fn request_mutation_revision(
     state: State<'_, AppState>,
     input: RequestMutationRevisionInput,
 ) -> Result<MutationRevisionResult, String> {
-    mutation_revision::request_mutation_revision(&state.db_pool, input).await
+    mutation_revision::request_mutation_revision(&state.db_pool, &state.model_registry, input).await
 }
 
 #[tauri::command]
@@ -155,4 +162,11 @@ pub async fn query_codebase(
         input.top_k.unwrap_or(5),
     )
     .await
+}
+
+#[tauri::command]
+pub async fn get_model_registry(
+    state: State<'_, AppState>,
+) -> Result<ModelRegistrySnapshot, String> {
+    Ok(state.model_registry.snapshot())
 }

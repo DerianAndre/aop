@@ -11,6 +11,7 @@ use crate::db::mutations::{self, CreateMutationInput};
 use crate::db::tasks::{self, CreateTaskRecordInput, TaskStatus, UpdateTaskStatusInput};
 use crate::mcp_bridge::client::BridgeClient;
 use crate::mcp_bridge::tool_caller::{self, ReadTargetFileInput, SearchTargetFilesInput};
+use crate::model_registry::ModelRegistry;
 use crate::vector::search;
 use crate::vector::ContextChunk;
 
@@ -50,9 +51,11 @@ pub struct IntentSummary {
 pub async fn execute_domain_task(
     pool: &SqlitePool,
     bridge_client: &BridgeClient,
+    model_registry: &ModelRegistry,
     input: ExecuteDomainTaskInput,
 ) -> Result<IntentSummary, String> {
     validate_input(&input)?;
+    let tier2_model = model_registry.resolve(2, None)?;
     let task = tasks::get_task_by_id(pool, input.task_id.trim()).await?;
 
     if task.tier != 2 {
@@ -98,6 +101,7 @@ pub async fn execute_domain_task(
     for (idx, persona) in personas.iter().enumerate() {
         let specialist_objective =
             build_specialist_objective(&task.domain, &task.objective, persona.as_str(), idx);
+        let specialist_model = model_registry.resolve(3, Some(persona.as_str()))?;
         let target_file = candidate_files
             .get(if candidate_files.is_empty() {
                 0
@@ -141,7 +145,23 @@ pub async fn execute_domain_task(
             token_budget: specialist_budgets[idx],
             target_files: vec![target_file.clone()],
             code_context,
-            constraints: build_constraints_for_specialist(&task.domain, task.risk_factor as f32),
+            constraints: {
+                let mut constraints =
+                    build_constraints_for_specialist(&task.domain, task.risk_factor as f32);
+                constraints.push(format!(
+                    "tier2_coordinator_model: {}/{}",
+                    tier2_model.provider.as_str(),
+                    tier2_model.model_id.as_str()
+                ));
+                constraints.push(format!(
+                    "specialist_model: {}/{}",
+                    specialist_model.provider.as_str(),
+                    specialist_model.model_id.as_str()
+                ));
+                constraints
+            },
+            model_provider: Some(specialist_model.provider.clone()),
+            model_id: Some(specialist_model.model_id.clone()),
         };
 
         match specialist::run_specialist_task(&specialist_task, file_content.as_deref()) {
@@ -550,6 +570,7 @@ mod tests {
     use crate::db::mutations::{list_mutations_for_task, ListTaskMutationsInput};
     use crate::db::tasks::{self, CreateTaskInput};
     use crate::mcp_bridge::client::BridgeClient;
+    use crate::model_registry::ModelRegistry;
     use crate::vector::indexer;
 
     use super::*;
@@ -618,9 +639,11 @@ mod tests {
         fs::create_dir_all(runtime.path().join("mcp-bridge")).expect("bridge dir should exist");
         let bridge_client = BridgeClient::new(runtime.path());
 
+        let model_registry = ModelRegistry::default();
         let result = execute_domain_task(
             &pool,
             &bridge_client,
+            &model_registry,
             ExecuteDomainTaskInput {
                 task_id: tier2.id.clone(),
                 target_project: project.path().to_string_lossy().to_string(),

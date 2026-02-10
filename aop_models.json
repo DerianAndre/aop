@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "defaultProvider": "openai",
+  "tiers": {
+    "1": {
+      "provider": "openai",
+      "modelId": "gpt-5"
+    },
+    "2": {
+      "provider": "openai",
+      "modelId": "gpt-5-mini"
+    },
+    "3": {
+      "provider": "openai",
+      "modelId": "gpt-5-nano"
+    }
+  },
+  "personaOverrides": {
+    "security_analyst": {
+      "provider": "openai",
+      "modelId": "o3"
+    },
+    "revision_specialist": {
+      "provider": "openai",
+      "modelId": "gpt-5-mini"
+    }
+  }
+}
