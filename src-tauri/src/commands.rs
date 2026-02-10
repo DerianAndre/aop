@@ -1,6 +1,10 @@
 use tauri::State;
 
 use crate::db::tasks::{self, CreateTaskInput, TaskRecord, UpdateTaskStatusInput};
+use crate::mcp_bridge::tool_caller::{
+    self, DirectoryListing, ListTargetDirInput, ReadTargetFileInput, SearchResult,
+    SearchTargetFilesInput, TargetFileContent,
+};
 use crate::AppState;
 
 #[tauri::command]
@@ -22,4 +26,35 @@ pub async fn update_task_status(
     input: UpdateTaskStatusInput,
 ) -> Result<TaskRecord, String> {
     tasks::update_task_status(&state.db_pool, input).await
+}
+
+#[tauri::command]
+pub async fn get_default_target_project() -> Result<String, String> {
+    std::env::current_dir()
+        .map(|path| path.to_string_lossy().to_string())
+        .map_err(|error| format!("Unable to resolve current directory: {error}"))
+}
+
+#[tauri::command]
+pub async fn list_target_dir(
+    state: State<'_, AppState>,
+    input: ListTargetDirInput,
+) -> Result<DirectoryListing, String> {
+    tool_caller::list_dir(&state.bridge_client, input).await
+}
+
+#[tauri::command]
+pub async fn read_target_file(
+    state: State<'_, AppState>,
+    input: ReadTargetFileInput,
+) -> Result<TargetFileContent, String> {
+    tool_caller::read_file(&state.bridge_client, input).await
+}
+
+#[tauri::command]
+pub async fn search_target_files(
+    state: State<'_, AppState>,
+    input: SearchTargetFilesInput,
+) -> Result<SearchResult, String> {
+    tool_caller::search_files(&state.bridge_client, input).await
 }

@@ -39,6 +39,10 @@ describe('App', () => {
         }
       }
 
+      if (command === 'get_default_target_project') {
+        return 'C:/tmp/project'
+      }
+
       return null
     })
   })

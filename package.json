@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "packageManager": "pnpm@10.29.2",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
@@ -10,7 +11,9 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "bridge:test": "pnpm --dir mcp-bridge test",
+    "bridge:build": "pnpm --dir mcp-bridge build"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.90.20",

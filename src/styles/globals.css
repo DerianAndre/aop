@@ -262,8 +262,164 @@ body {
   color: var(--color-muted-foreground);
 }
 
+.browser-card {
+  margin-top: 1.1rem;
+}
+
+.browser-content {
+  display: grid;
+  gap: 1rem;
+}
+
+.browser-controls {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.browser-inline-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.65rem;
+}
+
+.browser-search {
+  display: flex;
+  align-items: end;
+  gap: 0.65rem;
+}
+
+.browser-search .field {
+  flex: 1;
+}
+
+.browser-search button,
+.browser-controls button {
+  border: 0;
+  border-radius: 0.6rem;
+  padding: 0.68rem 0.9rem;
+  font-weight: 700;
+  color: var(--color-primary-foreground);
+  background: linear-gradient(
+    135deg,
+    color-mix(in oklch, var(--color-primary) 83%, black 10%),
+    color-mix(in oklch, var(--color-primary) 65%, var(--warning) 16%)
+  );
+  cursor: pointer;
+}
+
+.browser-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 320px) minmax(0, 1fr) minmax(220px, 300px);
+  gap: 0.7rem;
+}
+
+.browser-panel {
+  border: 1px solid var(--color-border);
+  border-radius: 0.65rem;
+  background: color-mix(in oklch, var(--color-card) 94%, transparent);
+  min-height: 290px;
+  display: flex;
+  flex-direction: column;
+}
+
+.browser-panel-header {
+  padding: 0.7rem 0.8rem;
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.meta-inline {
+  font-size: 0.76rem;
+  color: var(--color-muted-foreground);
+}
+
+.browser-list {
+  display: grid;
+  gap: 0.3rem;
+  padding: 0.55rem;
+  overflow: auto;
+}
+
+.browser-entry {
+  border: 1px solid var(--color-border);
+  border-radius: 0.55rem;
+  padding: 0.45rem 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  background: color-mix(in oklch, var(--color-background) 94%, white);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.browser-entry:hover,
+.search-match:hover {
+  border-color: color-mix(in oklch, var(--color-primary) 55%, var(--color-border));
+}
+
+.browser-entry-icon {
+  font-size: 0.68rem;
+  padding: 0.13rem 0.32rem;
+  border-radius: 0.35rem;
+  border: 1px solid var(--color-border);
+  color: var(--color-muted-foreground);
+  min-width: 2.4rem;
+  text-align: center;
+}
+
+.file-preview {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 0.75rem;
+  overflow: auto;
+  font-family: "Iosevka Term", "Cascadia Mono", "Consolas", monospace;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.search-list {
+  margin: 0;
+  padding: 0.55rem;
+  list-style: none;
+  display: grid;
+  gap: 0.35rem;
+  overflow: auto;
+}
+
+.search-match {
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  padding: 0.45rem 0.5rem;
+  width: 100%;
+  background: color-mix(in oklch, var(--color-background) 94%, white);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
 @media (max-width: 900px) {
   .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .browser-inline-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .browser-search {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .browser-grid {
     grid-template-columns: 1fr;
   }
 }

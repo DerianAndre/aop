@@ -1,9 +1,24 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 
-import { createTask, getTasks } from '@/hooks/useTauri'
+import {
+  createTask,
+  getDefaultTargetProject,
+  getTasks,
+  listTargetDir,
+  readTargetFile,
+  searchTargetFiles,
+} from '@/hooks/useTauri'
 import { cn } from '@/lib/utils'
-import type { CreateTaskInput, TaskRecord, TaskStatus } from '@/types'
+import type {
+  CreateTaskInput,
+  DirectoryEntry,
+  DirectoryListing,
+  SearchResult,
+  TargetFileContent,
+  TaskRecord,
+  TaskStatus,
+} from '@/types'
 
 const STATUS_CLASS: Record<TaskStatus, string> = {
   pending: 'status-pending',
@@ -27,12 +42,35 @@ function formatTimestamp(timestamp: number): string {
   }).format(new Date(timestamp * 1000))
 }
 
+function parseCommandArgs(rawArgs: string): string[] | undefined {
+  const values = rawArgs
+    .split(' ')
+    .map((value) => value.trim())
+    .filter(Boolean)
+
+  return values.length > 0 ? values : undefined
+}
+
+function entryIcon(entry: DirectoryEntry): string {
+  return entry.isDir ? 'DIR' : 'FILE'
+}
+
 function App() {
   const [tasks, setTasks] = useState<TaskRecord[]>([])
   const [formState, setFormState] = useState<CreateTaskInput>(DEFAULT_FORM)
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [isLoading, setIsLoading] = useState(true)
-  const [feedback, setFeedback] = useState<string | null>(null)
+  const [isLoadingTasks, setIsLoadingTasks] = useState(true)
+  const [taskFeedback, setTaskFeedback] = useState<string | null>(null)
+
+  const [targetProject, setTargetProject] = useState('')
+  const [mcpCommand, setMcpCommand] = useState('')
+  const [mcpArgs, setMcpArgs] = useState('')
+  const [directory, setDirectory] = useState<DirectoryListing | null>(null)
+  const [selectedFile, setSelectedFile] = useState<TargetFileContent | null>(null)
+  const [searchPattern, setSearchPattern] = useState('')
+  const [searchResult, setSearchResult] = useState<SearchResult | null>(null)
+  const [isBrowsing, setIsBrowsing] = useState(false)
+  const [browserFeedback, setBrowserFeedback] = useState<string | null>(null)
 
   const taskCountLabel = useMemo(() => {
     const count = tasks.length
@@ -41,28 +79,38 @@ function App() {
 
   useEffect(() => {
     void loadTasks()
+    void loadDefaultTargetProject()
   }, [])
 
+  async function loadDefaultTargetProject() {
+    try {
+      const projectPath = await getDefaultTargetProject()
+      setTargetProject(projectPath)
+    } catch {
+      // Keep target project field user-driven when current directory isn't available.
+    }
+  }
+
   async function loadTasks() {
-    setIsLoading(true)
-    setFeedback(null)
+    setIsLoadingTasks(true)
+    setTaskFeedback(null)
 
     try {
       const records = await getTasks()
       setTasks(records)
     } catch (error) {
-      setFeedback(error instanceof Error ? error.message : String(error))
+      setTaskFeedback(error instanceof Error ? error.message : String(error))
     } finally {
-      setIsLoading(false)
+      setIsLoadingTasks(false)
     }
   }
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleTaskSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    setFeedback(null)
+    setTaskFeedback(null)
 
     if (!formState.objective.trim()) {
-      setFeedback('Objective is required.')
+      setTaskFeedback('Objective is required.')
       return
     }
 
@@ -78,9 +126,115 @@ function App() {
       setTasks((current) => [createdTask, ...current])
       setFormState((previous) => ({ ...previous, objective: '' }))
     } catch (error) {
-      setFeedback(error instanceof Error ? error.message : String(error))
+      setTaskFeedback(error instanceof Error ? error.message : String(error))
     } finally {
       setIsSubmitting(false)
+    }
+  }
+
+  function buildMcpConfig() {
+    const command = mcpCommand.trim()
+    if (!command) {
+      return {}
+    }
+
+    return {
+      mcpCommand: command,
+      mcpArgs: parseCommandArgs(mcpArgs),
+    }
+  }
+
+  async function browseDirectory(dirPath = '.'): Promise<void> {
+    const target = targetProject.trim()
+    if (!target) {
+      setBrowserFeedback('Target project path is required.')
+      return
+    }
+
+    setIsBrowsing(true)
+    setBrowserFeedback(null)
+
+    try {
+      const listing = await listTargetDir({
+        targetProject: target,
+        dirPath,
+        ...buildMcpConfig(),
+      })
+
+      setDirectory(listing)
+      setSearchResult(null)
+      setSelectedFile(null)
+      if (listing.warnings.length > 0) {
+        setBrowserFeedback(listing.warnings.join('\n'))
+      }
+    } catch (error) {
+      setBrowserFeedback(error instanceof Error ? error.message : String(error))
+    } finally {
+      setIsBrowsing(false)
+    }
+  }
+
+  async function openFile(filePath: string): Promise<void> {
+    const target = targetProject.trim()
+    if (!target) {
+      setBrowserFeedback('Target project path is required.')
+      return
+    }
+
+    setIsBrowsing(true)
+    setBrowserFeedback(null)
+
+    try {
+      const file = await readTargetFile({
+        targetProject: target,
+        filePath,
+        ...buildMcpConfig(),
+      })
+
+      setSelectedFile(file)
+      if (file.warnings.length > 0) {
+        setBrowserFeedback(file.warnings.join('\n'))
+      }
+    } catch (error) {
+      setBrowserFeedback(error instanceof Error ? error.message : String(error))
+    } finally {
+      setIsBrowsing(false)
+    }
+  }
+
+  async function handleSearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const target = targetProject.trim()
+    const pattern = searchPattern.trim()
+
+    if (!target) {
+      setBrowserFeedback('Target project path is required.')
+      return
+    }
+    if (!pattern) {
+      setBrowserFeedback('Search pattern is required.')
+      return
+    }
+
+    setIsBrowsing(true)
+    setBrowserFeedback(null)
+
+    try {
+      const result = await searchTargetFiles({
+        targetProject: target,
+        pattern,
+        limit: 30,
+        ...buildMcpConfig(),
+      })
+
+      setSearchResult(result)
+      if (result.warnings.length > 0) {
+        setBrowserFeedback(result.warnings.join('\n'))
+      }
+    } catch (error) {
+      setBrowserFeedback(error instanceof Error ? error.message : String(error))
+    } finally {
+      setIsBrowsing(false)
     }
   }
 
@@ -90,7 +244,7 @@ function App() {
         <div>
           <h1 className="app-title">Autonomous Orchestration Platform</h1>
           <p className="app-subtitle">
-            Phase 1 foundation: create tasks through Tauri IPC and persist them in SQLite.
+            Phase 2 adds the MCP bridge and target-project file browsing over Tauri commands.
           </p>
         </div>
         <strong>{taskCountLabel}</strong>
@@ -102,7 +256,7 @@ function App() {
             <h2 className="card-title">Create Task</h2>
           </div>
           <div className="card-content">
-            <form className="task-form" onSubmit={handleSubmit}>
+            <form className="task-form" onSubmit={handleTaskSubmit}>
               <div className="field">
                 <label htmlFor="tier">Tier</label>
                 <select
@@ -172,7 +326,7 @@ function App() {
               </button>
             </form>
 
-            {feedback ? <p className="feedback">{feedback}</p> : null}
+            {taskFeedback ? <p className="feedback">{taskFeedback}</p> : null}
           </div>
         </article>
 
@@ -181,13 +335,13 @@ function App() {
             <h2 className="card-title">Task List</h2>
           </div>
           <div className="card-content">
-            {isLoading ? <p className="empty-state">Loading tasks...</p> : null}
+            {isLoadingTasks ? <p className="empty-state">Loading tasks...</p> : null}
 
-            {!isLoading && tasks.length === 0 ? (
+            {!isLoadingTasks && tasks.length === 0 ? (
               <p className="empty-state">No tasks yet. Create the first task from the form.</p>
             ) : null}
 
-            {!isLoading && tasks.length > 0 ? (
+            {!isLoadingTasks && tasks.length > 0 ? (
               <ul className="task-list">
                 {tasks.map((task) => (
                   <li className="task-item" key={task.id}>
@@ -211,6 +365,139 @@ function App() {
             ) : null}
           </div>
         </article>
+      </section>
+
+      <section className="card browser-card">
+        <div className="card-header">
+          <h2 className="card-title">Target Project Browser</h2>
+        </div>
+        <div className="card-content browser-content">
+          <form
+            className="browser-controls"
+            onSubmit={(event) => {
+              event.preventDefault()
+              void browseDirectory('.')
+            }}
+          >
+            <div className="field">
+              <label htmlFor="target-project">Target Project Path</label>
+              <input
+                id="target-project"
+                value={targetProject}
+                onChange={(event) => setTargetProject(event.target.value)}
+                placeholder="C:\\repo\\target-project"
+              />
+            </div>
+
+            <div className="browser-inline-grid">
+              <div className="field">
+                <label htmlFor="mcp-command">MCP Command (optional)</label>
+                <input
+                  id="mcp-command"
+                  value={mcpCommand}
+                  onChange={(event) => setMcpCommand(event.target.value)}
+                  placeholder="npx @aidd/mcp"
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="mcp-args">MCP Args (optional)</label>
+                <input
+                  id="mcp-args"
+                  value={mcpArgs}
+                  onChange={(event) => setMcpArgs(event.target.value)}
+                  placeholder="--project C:\\target"
+                />
+              </div>
+            </div>
+
+            <button disabled={isBrowsing} type="submit">
+              {isBrowsing ? 'Working...' : 'Load Root'}
+            </button>
+          </form>
+
+          <form className="browser-search" onSubmit={handleSearch}>
+            <div className="field">
+              <label htmlFor="search-pattern">Search Files</label>
+              <input
+                id="search-pattern"
+                value={searchPattern}
+                onChange={(event) => setSearchPattern(event.target.value)}
+                placeholder="useSession"
+              />
+            </div>
+            <button disabled={isBrowsing} type="submit">
+              Search
+            </button>
+          </form>
+
+          {browserFeedback ? <p className="feedback">{browserFeedback}</p> : null}
+
+          <div className="browser-grid">
+            <div className="browser-panel">
+              <div className="browser-panel-header">
+                <strong>Directory</strong>
+                <span className="meta-inline">{directory ? directory.cwd : '.'}</span>
+                {directory?.source ? <span className="meta-inline">source: {directory.source}</span> : null}
+              </div>
+
+              <div className="browser-list">
+                {directory?.parent ? (
+                  <button
+                    className="browser-entry"
+                    onClick={() => void browseDirectory(directory.parent ?? '.')}
+                  >
+                    <span className="browser-entry-icon">DIR</span>
+                    <span>..</span>
+                  </button>
+                ) : null}
+
+                {directory?.entries.map((entry) => (
+                  <button
+                    className="browser-entry"
+                    key={entry.path}
+                    onClick={() => (entry.isDir ? void browseDirectory(entry.path) : void openFile(entry.path))}
+                  >
+                    <span className="browser-entry-icon">{entryIcon(entry)}</span>
+                    <span>{entry.name}</span>
+                  </button>
+                ))}
+
+                {!directory ? <p className="empty-state">Load a project path to browse files.</p> : null}
+              </div>
+            </div>
+
+            <div className="browser-panel">
+              <div className="browser-panel-header">
+                <strong>File Preview</strong>
+                <span className="meta-inline">{selectedFile?.path ?? 'No file selected'}</span>
+              </div>
+
+              <pre className="file-preview">
+                {selectedFile ? selectedFile.content.slice(0, 5000) : 'Select a file to preview content.'}
+              </pre>
+            </div>
+
+            <div className="browser-panel">
+              <div className="browser-panel-header">
+                <strong>Search Results</strong>
+                <span className="meta-inline">
+                  {searchResult ? `${searchResult.matches.length} matches` : 'No search yet'}
+                </span>
+              </div>
+
+              <ul className="search-list">
+                {searchResult?.matches.map((match) => (
+                  <li key={`${match.path}-${match.line ?? 0}`}>
+                    <button className="search-match" onClick={() => void openFile(match.path)}>
+                      <span>{match.path}</span>
+                      {match.line ? <span className="meta-inline">line {match.line}</span> : null}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </div>
       </section>
     </main>
   )

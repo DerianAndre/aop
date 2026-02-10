@@ -33,3 +33,64 @@ export interface UpdateTaskStatusInput {
   status: TaskStatus
   errorMessage?: string | null
 }
+
+export interface ListTargetDirInput {
+  targetProject: string
+  dirPath?: string
+  mcpCommand?: string
+  mcpArgs?: string[]
+}
+
+export interface ReadTargetFileInput {
+  targetProject: string
+  filePath: string
+  mcpCommand?: string
+  mcpArgs?: string[]
+}
+
+export interface SearchTargetFilesInput {
+  targetProject: string
+  pattern: string
+  limit?: number
+  mcpCommand?: string
+  mcpArgs?: string[]
+}
+
+export interface DirectoryEntry {
+  name: string
+  path: string
+  isDir: boolean
+  size: number | null
+}
+
+export interface DirectoryListing {
+  root: string
+  cwd: string
+  parent: string | null
+  entries: DirectoryEntry[]
+  source: 'local' | 'mcp' | 'mcp_fallback_local'
+  warnings: string[]
+}
+
+export interface TargetFileContent {
+  root: string
+  path: string
+  size: number
+  content: string
+  source: 'local' | 'mcp' | 'mcp_fallback_local'
+  warnings: string[]
+}
+
+export interface SearchMatch {
+  path: string
+  line: number | null
+  preview: string | null
+}
+
+export interface SearchResult {
+  root: string
+  pattern: string
+  matches: SearchMatch[]
+  source: 'local' | 'mcp' | 'mcp_fallback_local'
+  warnings: string[]
+}

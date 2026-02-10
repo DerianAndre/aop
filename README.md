@@ -1,6 +1,6 @@
 # Autonomous Orchestration Platform (AOP)
 
-Phase 1 foundation for a Tauri v2 desktop app with React frontend and SQLite backend.
+Phases 1-2 foundation for a Tauri v2 desktop app with React frontend, SQLite backend, and an MCP bridge.
 
 ## What Is Implemented
 
@@ -14,25 +14,41 @@ Phase 1 foundation for a Tauri v2 desktop app with React frontend and SQLite bac
 - Phase 1 UI:
   - Task creation form
   - Persisted task list with status badges
+- Phase 2 bridge package at `mcp-bridge/` with:
+  - `list_dir`
+  - `read_file`
+  - `search_files`
+  - Optional MCP stdio passthrough (`mcpCommand` + `mcpArgs`)
+- New Tauri commands:
+  - `get_default_target_project`
+  - `list_target_dir`
+  - `read_target_file`
+  - `search_target_files`
+- Phase 2 UI:
+  - Target project path input
+  - Directory browser
+  - File preview
+  - Search panel
 
 ## Run
 
 ```bash
-npm install
-npm run tauri dev
+pnpm install
+pnpm tauri dev
 ```
 
 ## Validate
 
 ```bash
-npm run lint
-npm run test
-npm run build
+pnpm lint
+pnpm test
+pnpm bridge:test
+pnpm build
 cd src-tauri && cargo test
 ```
 
 ## Build Installers
 
 ```bash
-npm run tauri -- build
+pnpm tauri build
 ```
