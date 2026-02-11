@@ -23,6 +23,7 @@ import {
   runMutationPipeline,
   setMutationStatus,
 } from '@/hooks/useTauri'
+import { executeRestartApply, formatRestartApplyIssue } from '@/lib/restartApply'
 import { useAopStore } from '@/store/aop-store'
 import type {
   AuditLogEntry,
@@ -456,27 +457,15 @@ export function MutationsView() {
           return
         }
 
-        const tier2TaskIds = Array.from(new Set(updated.filter((task) => task.tier === 2).map((task) => task.id)))
-        const executionResults = await Promise.allSettled(
-          tier2TaskIds.map((taskId) =>
-            executeDomainTask({
-              taskId,
-              targetProject: target,
-              topK: 8,
-              ...mcpConfig,
-            }),
-          ),
-        )
-        const failedExecutions = executionResults.filter((result) => result.status === 'rejected')
-        if (failedExecutions.length > 0) {
-          const firstFailure = failedExecutions[0] as PromiseRejectedResult
-          const message =
-            firstFailure.reason instanceof Error
-              ? firstFailure.reason.message
-              : String(firstFailure.reason)
-          setTaskControlError(
-            `Restarted tasks, but ${failedExecutions.length} Tier 2 execution(s) failed. First error: ${message}`,
-          )
+        const summary = await executeRestartApply({
+          updatedTasks: updated,
+          targetProject: target,
+          mcpConfig,
+          topK: 8,
+        })
+        const restartIssue = formatRestartApplyIssue(summary)
+        if (restartIssue) {
+          setTaskControlError(restartIssue)
         }
       }
 
