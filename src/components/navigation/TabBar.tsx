@@ -6,6 +6,7 @@ import {
   LayoutDashboard,
   Brain,
   GitPullRequest,
+  TerminalSquare,
   FileText,
   Settings,
 } from 'lucide-react'
@@ -15,6 +16,7 @@ const TAB_CONFIG: Array<{ id: AppTab; label: string; icon: React.ReactNode }> = 
   { id: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-4 h-4" /> },
   { id: 'context', label: 'Context', icon: <Brain className="w-4 h-4" /> },
   { id: 'mutations', label: 'Mutations', icon: <GitPullRequest className="w-4 h-4" /> },
+  { id: 'terminal', label: 'Terminal', icon: <TerminalSquare className="w-4 h-4" /> },
   { id: 'logs', label: 'Logs', icon: <FileText className="w-4 h-4" /> },
   { id: 'system', label: 'System', icon: <Settings className="w-4 h-4" /> },
 ]
@@ -24,7 +26,7 @@ export function TabBar() {
 
   return (
     <Tabs value={activeTab} onValueChange={(value: string) => setActiveTab(value as AppTab)}>
-      <TabsList className="grid w-full grid-cols-6">
+      <TabsList className="grid w-full grid-cols-7">
         {TAB_CONFIG.map((tab) => (
           <TabsTrigger key={tab.id} value={tab.id} className="flex items-center gap-2">
             {tab.icon}

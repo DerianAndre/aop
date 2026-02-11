@@ -93,6 +93,77 @@ export function MutationsView() {
   const selectedTask: TaskRecord | null =
     tasks.find((task) => task.id === selectedTaskId) ??
     null
+  const parentByTaskId = useMemo(() => {
+    const result = new Map<string, string | null>()
+    tasks.forEach((task) => {
+      result.set(task.id, task.parentId)
+    })
+    return result
+  }, [tasks])
+  const resumableTaskIds = useMemo(() => {
+    const result = new Set<string>()
+    tasks.forEach((task) => {
+      if (task.status !== 'paused') {
+        return
+      }
+
+      let currentId: string | null = task.id
+      while (currentId) {
+        result.add(currentId)
+        currentId = parentByTaskId.get(currentId) ?? null
+      }
+    })
+    return result
+  }, [parentByTaskId, tasks])
+  const pausableTaskIds = useMemo(() => {
+    const result = new Set<string>()
+    tasks.forEach((task) => {
+      if (task.status === 'completed' || task.status === 'failed' || task.status === 'paused') {
+        return
+      }
+
+      let currentId: string | null = task.id
+      while (currentId) {
+        result.add(currentId)
+        currentId = parentByTaskId.get(currentId) ?? null
+      }
+    })
+    return result
+  }, [parentByTaskId, tasks])
+  const stoppableTaskIds = useMemo(() => {
+    const result = new Set<string>()
+    tasks.forEach((task) => {
+      if (task.status === 'completed' || task.status === 'failed') {
+        return
+      }
+
+      let currentId: string | null = task.id
+      while (currentId) {
+        result.add(currentId)
+        currentId = parentByTaskId.get(currentId) ?? null
+      }
+    })
+    return result
+  }, [parentByTaskId, tasks])
+  const restartableTaskIds = useMemo(() => {
+    const result = new Set<string>()
+    tasks.forEach((task) => {
+      if (task.status !== 'failed' && task.status !== 'completed' && task.status !== 'paused') {
+        return
+      }
+
+      let currentId: string | null = task.id
+      while (currentId) {
+        result.add(currentId)
+        currentId = parentByTaskId.get(currentId) ?? null
+      }
+    })
+    return result
+  }, [parentByTaskId, tasks])
+  const canPauseSelectedTask = selectedTask ? pausableTaskIds.has(selectedTask.id) : false
+  const canResumeSelectedTask = selectedTask ? resumableTaskIds.has(selectedTask.id) : false
+  const canStopSelectedTask = selectedTask ? stoppableTaskIds.has(selectedTask.id) : false
+  const canRestartSelectedTask = selectedTask ? restartableTaskIds.has(selectedTask.id) : false
   const selectedMutation: MutationRecord | null =
     mutations.find((mutation) => mutation.id === selectedMutationId) ??
     null
@@ -370,7 +441,45 @@ export function MutationsView() {
         includeDescendants: true,
         reason: action === 'stop' ? 'manual stop from mutations panel' : undefined,
       })
+      if (updated.length === 0) {
+        setTaskControlError(`No tasks were updated for action '${action}'.`)
+      }
       updated.forEach((task) => addTask(task))
+
+      if (action === 'restart') {
+        const target = targetProject.trim()
+        if (!target) {
+          setTaskControlError(
+            'Tasks were restarted, but no target project is configured to run Tier 2 agents.',
+          )
+          await loadTasks()
+          return
+        }
+
+        const tier2TaskIds = Array.from(new Set(updated.filter((task) => task.tier === 2).map((task) => task.id)))
+        const executionResults = await Promise.allSettled(
+          tier2TaskIds.map((taskId) =>
+            executeDomainTask({
+              taskId,
+              targetProject: target,
+              topK: 8,
+              ...mcpConfig,
+            }),
+          ),
+        )
+        const failedExecutions = executionResults.filter((result) => result.status === 'rejected')
+        if (failedExecutions.length > 0) {
+          const firstFailure = failedExecutions[0] as PromiseRejectedResult
+          const message =
+            firstFailure.reason instanceof Error
+              ? firstFailure.reason.message
+              : String(firstFailure.reason)
+          setTaskControlError(
+            `Restarted tasks, but ${failedExecutions.length} Tier 2 execution(s) failed. First error: ${message}`,
+          )
+        }
+      }
+
       await loadTasks()
       if (selectedTaskId) {
         await loadMutationsForTask(selectedTaskId, false)
@@ -457,7 +566,7 @@ export function MutationsView() {
 
               <div className="flex flex-wrap gap-2">
                 <Button
-                  disabled={activeTaskControl !== null}
+                  disabled={activeTaskControl !== null || !canPauseSelectedTask}
                   onClick={() => void handleTaskControl('pause')}
                   size="sm"
                   type="button"
@@ -466,7 +575,7 @@ export function MutationsView() {
                   {activeTaskControl === 'pause' ? 'Pausing...' : 'Pause T1/T2/T3'}
                 </Button>
                 <Button
-                  disabled={activeTaskControl !== null}
+                  disabled={activeTaskControl !== null || !canResumeSelectedTask}
                   onClick={() => void handleTaskControl('resume')}
                   size="sm"
                   type="button"
@@ -475,13 +584,22 @@ export function MutationsView() {
                   {activeTaskControl === 'resume' ? 'Resuming...' : 'Resume T1/T2/T3'}
                 </Button>
                 <Button
-                  disabled={activeTaskControl !== null}
+                  disabled={activeTaskControl !== null || !canStopSelectedTask}
                   onClick={() => void handleTaskControl('stop')}
                   size="sm"
                   type="button"
                   variant="destructive"
                 >
                   {activeTaskControl === 'stop' ? 'Stopping...' : 'Stop T1/T2/T3'}
+                </Button>
+                <Button
+                  disabled={activeTaskControl !== null || !canRestartSelectedTask}
+                  onClick={() => void handleTaskControl('restart')}
+                  size="sm"
+                  type="button"
+                  variant="secondary"
+                >
+                  {activeTaskControl === 'restart' ? 'Restarting...' : 'Restart T1/T2/T3'}
                 </Button>
               </div>
 

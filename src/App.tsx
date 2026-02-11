@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { AppLayout } from '@/layouts/AppLayout'
 import { useAopStore } from '@/store/aop-store'
+import { Toaster } from 'sonner'
 
 function App() {
   const handleTauriEvent = useAopStore((state) => state.handleTauriEvent)
@@ -15,7 +16,12 @@ function App() {
     // return () => { unlisten() }
   }, [handleTauriEvent])
 
-  return <AppLayout />
+  return (
+    <>
+      <AppLayout />
+      <Toaster position="top-right" richColors />
+    </>
+  )
 }
 
 export default App

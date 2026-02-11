@@ -6,7 +6,10 @@ use crate::db::budget_requests::{
     self, BudgetRequestRecord, CreateBudgetRequestInput, ListTaskBudgetRequestsInput,
     ResolveBudgetRequestInput,
 };
-use crate::db::metrics::{self, AuditLogEntry, ListAuditLogInput, ListTaskActivityInput};
+use crate::db::metrics::{
+    self, AgentTerminalSession, AuditLogEntry, ListAgentTerminalsInput, ListAuditLogInput,
+    ListTaskActivityInput, ListTerminalEventsInput, TerminalEventRecord,
+};
 use crate::db::mutations::{
     self, ListTaskMutationsInput, MutationRecord, UpdateMutationStatusInput,
 };
@@ -221,6 +224,22 @@ pub async fn list_task_activity(
     input: ListTaskActivityInput,
 ) -> Result<Vec<AuditLogEntry>, String> {
     metrics::list_task_activity(&state.db_pool, input).await
+}
+
+#[tauri::command]
+pub async fn list_agent_terminals(
+    state: State<'_, AppState>,
+    input: ListAgentTerminalsInput,
+) -> Result<Vec<AgentTerminalSession>, String> {
+    metrics::list_agent_terminals(&state.db_pool, input).await
+}
+
+#[tauri::command]
+pub async fn list_terminal_events(
+    state: State<'_, AppState>,
+    input: ListTerminalEventsInput,
+) -> Result<Vec<TerminalEventRecord>, String> {
+    metrics::list_terminal_events(&state.db_pool, input).await
 }
 
 #[tauri::command]

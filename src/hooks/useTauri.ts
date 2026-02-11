@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 
 import type {
+  AgentTerminalSession,
   AuditLogEntry,
   BudgetRequestRecord,
   CreateTaskInput,
@@ -12,8 +13,10 @@ import type {
   IndexTargetProjectInput,
   IntentSummary,
   ListAuditLogInput,
+  ListAgentTerminalsInput,
   ListTaskBudgetRequestsInput,
   ListTaskActivityInput,
+  ListTerminalEventsInput,
   ListTargetDirInput,
   ListTaskMutationsInput,
   MutationPipelineResult,
@@ -30,6 +33,7 @@ import type {
   SearchResult,
   SearchTargetFilesInput,
   SetMutationStatusInput,
+  TerminalEventRecord,
   TargetFileContent,
   TaskRecord,
   UserObjectiveInput,
@@ -94,6 +98,14 @@ export async function listAuditLog(input: ListAuditLogInput): Promise<AuditLogEn
 
 export async function listTaskActivity(input: ListTaskActivityInput): Promise<AuditLogEntry[]> {
   return invoke<AuditLogEntry[]>('list_task_activity', { input })
+}
+
+export async function listAgentTerminals(input: ListAgentTerminalsInput): Promise<AgentTerminalSession[]> {
+  return invoke<AgentTerminalSession[]>('list_agent_terminals', { input })
+}
+
+export async function listTerminalEvents(input: ListTerminalEventsInput): Promise<TerminalEventRecord[]> {
+  return invoke<TerminalEventRecord[]>('list_terminal_events', { input })
 }
 
 export async function getDefaultTargetProject(): Promise<string> {

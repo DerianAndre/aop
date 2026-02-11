@@ -1,6 +1,6 @@
 import type { TaskRecord, MutationRecord, ContextChunk } from '@/types'
 
-export type AppTab = 'tasks' | 'dashboard' | 'context' | 'mutations' | 'logs' | 'system'
+export type AppTab = 'tasks' | 'dashboard' | 'context' | 'mutations' | 'terminal' | 'logs' | 'system'
 
 export interface AopStoreState {
   // Core data

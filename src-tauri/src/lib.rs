@@ -77,6 +77,8 @@ pub fn run() {
             commands::request_mutation_revision,
             commands::list_audit_log,
             commands::list_task_activity,
+            commands::list_agent_terminals,
+            commands::list_terminal_events,
             commands::get_default_target_project,
             commands::list_target_dir,
             commands::read_target_file,

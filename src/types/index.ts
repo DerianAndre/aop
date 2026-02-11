@@ -173,7 +173,43 @@ export interface ListAuditLogInput {
   limit?: number
 }
 
-export type TaskControlAction = 'pause' | 'resume' | 'stop'
+export interface ListAgentTerminalsInput {
+  rootTaskId?: string
+  includeDescendants?: boolean
+  includeInactive?: boolean
+  limit?: number
+}
+
+export interface AgentTerminalSession {
+  actor: string
+  taskId: string
+  eventCount: number
+  lastEventId: number
+  lastTimestamp: number
+  taskStatus: string | null
+  taskTier: number | null
+  taskDomain: string | null
+  lastAction: string
+  lastDetails: string | null
+}
+
+export interface ListTerminalEventsInput {
+  actor: string
+  taskId: string
+  limit?: number
+  sinceId?: number
+}
+
+export interface TerminalEventRecord {
+  id: number
+  timestamp: number
+  actor: string
+  action: string
+  taskId: string
+  details: string | null
+}
+
+export type TaskControlAction = 'pause' | 'resume' | 'stop' | 'restart'
 
 export interface ControlTaskInput {
   taskId: string

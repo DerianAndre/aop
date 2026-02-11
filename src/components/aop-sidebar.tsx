@@ -4,6 +4,7 @@ import {
   LayoutDashboard,
   Brain,
   GitPullRequest,
+  TerminalSquare,
   FileText,
   Settings,
   Activity,
@@ -47,6 +48,12 @@ const navItems = [
     url: "#",
     icon: GitPullRequest,
     value: "mutations" as AppTab,
+  },
+  {
+    title: "Terminal",
+    url: "#",
+    icon: TerminalSquare,
+    value: "terminal" as AppTab,
   },
   {
     title: "Logs",

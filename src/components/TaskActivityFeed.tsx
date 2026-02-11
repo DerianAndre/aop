@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { listTaskActivity } from '@/hooks/useTauri'
 import type { AuditLogEntry } from '@/types'
+import { toast } from 'sonner'
 
 interface TaskActivityFeedProps {
   taskId: string | null
@@ -11,6 +12,7 @@ interface TaskActivityFeedProps {
   includeDescendants?: boolean
   limit?: number
   pollMs?: number
+  enableBudgetToasts?: boolean
 }
 
 function formatTimestamp(timestamp: number): string {
@@ -26,10 +28,18 @@ export default function TaskActivityFeed({
   includeDescendants = true,
   limit = 120,
   pollMs = 1500,
+  enableBudgetToasts = true,
 }: TaskActivityFeedProps) {
   const [entries, setEntries] = useState<AuditLogEntry[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const initializedRef = useRef(false)
+  const lastSeenIdRef = useRef(0)
+
+  useEffect(() => {
+    initializedRef.current = false
+    lastSeenIdRef.current = 0
+  }, [taskId])
 
   useEffect(() => {
     if (!taskId) {
@@ -51,6 +61,43 @@ export default function TaskActivityFeed({
           limit,
         })
         if (!isCancelled) {
+          if (enableBudgetToasts && nextEntries.length > 0) {
+            const maxId = nextEntries.reduce((max, entry) => Math.max(max, entry.id), 0)
+            if (!initializedRef.current) {
+              initializedRef.current = true
+              lastSeenIdRef.current = maxId
+            } else {
+              const unseenEntries = nextEntries
+                .filter((entry) => entry.id > lastSeenIdRef.current)
+                .sort((left, right) => left.id - right.id)
+
+              unseenEntries.forEach((entry) => {
+                if (entry.action === 'token_budget_increase_requested') {
+                  toast.info(`Budget request created (${entry.targetId?.slice(0, 8) ?? 'task'})`, {
+                    description: entry.details ?? undefined,
+                  })
+                } else if (
+                  entry.action === 'token_budget_auto_increase_applied' ||
+                  entry.action === 'task_budget_auto_approved'
+                ) {
+                  toast.success(`Budget increased (${entry.targetId?.slice(0, 8) ?? 'task'})`, {
+                    description: entry.details ?? undefined,
+                  })
+                } else if (entry.action === 'task_budget_request_resolved') {
+                  if (entry.details?.includes('"status":"rejected"')) {
+                    toast.warning(`Budget request rejected (${entry.targetId?.slice(0, 8) ?? 'task'})`, {
+                      description: entry.details ?? undefined,
+                    })
+                  } else {
+                    toast.success(`Budget request resolved (${entry.targetId?.slice(0, 8) ?? 'task'})`, {
+                      description: entry.details ?? undefined,
+                    })
+                  }
+                }
+              })
+              lastSeenIdRef.current = Math.max(lastSeenIdRef.current, maxId)
+            }
+          }
           setEntries(nextEntries)
           setError(null)
         }
@@ -76,7 +123,7 @@ export default function TaskActivityFeed({
         clearInterval(intervalRef)
       }
     }
-  }, [includeDescendants, limit, pollMs, taskId])
+  }, [enableBudgetToasts, includeDescendants, limit, pollMs, taskId])
 
   return (
     <div className="space-y-2">

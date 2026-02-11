@@ -95,6 +95,7 @@ pub enum TaskControlAction {
     Pause,
     Resume,
     Stop,
+    Restart,
 }
 
 impl TaskControlAction {
@@ -103,6 +104,7 @@ impl TaskControlAction {
             TaskControlAction::Pause => "pause",
             TaskControlAction::Resume => "resume",
             TaskControlAction::Stop => "stop",
+            TaskControlAction::Restart => "restart",
         }
     }
 }
@@ -236,7 +238,9 @@ pub async fn control_task(
         return Err("taskId is required".to_string());
     }
 
-    let target_ids = if input.include_descendants.unwrap_or(true) {
+    let include_descendants = input.include_descendants.unwrap_or(true);
+    let action = input.action.clone();
+    let target_ids = if include_descendants {
         collect_task_tree_ids(pool, root_task_id).await?
     } else {
         get_task_by_id(pool, root_task_id).await?;
@@ -253,7 +257,7 @@ pub async fn control_task(
 
     for task_id in target_ids {
         let current = get_task_by_id(pool, &task_id).await?;
-        match input.action {
+        match &action {
             TaskControlAction::Pause => {
                 if matches!(current.status.as_str(), "completed" | "failed" | "paused") {
                     continue;
@@ -304,7 +308,48 @@ pub async fn control_task(
                 .await?;
                 updated.push(record);
             }
+            TaskControlAction::Restart => {
+                if !matches!(current.status.as_str(), "failed" | "completed" | "paused") {
+                    continue;
+                }
+
+                let now = Utc::now().timestamp();
+                let rows_affected = sqlx::query(
+                    r#"
+                    UPDATE aop_tasks
+                    SET status = 'pending', error_message = NULL, retry_count = retry_count + 1, updated_at = ?
+                    WHERE id = ?
+                    "#,
+                )
+                .bind(now)
+                .bind(task_id.as_str())
+                .execute(pool)
+                .await
+                .map_err(|error| format!("Failed to restart task '{}': {error}", task_id))?
+                .rows_affected();
+
+                if rows_affected == 0 {
+                    continue;
+                }
+
+                let record = get_task_by_id(pool, task_id.as_str()).await?;
+                updated.push(record);
+            }
         }
+    }
+
+    if updated.is_empty() {
+        let scope = if include_descendants {
+            "task tree"
+        } else {
+            "task"
+        };
+        return Err(format!(
+            "No tasks were updated for action '{}' on {} '{}'.",
+            action.as_str(),
+            scope,
+            root_task_id
+        ));
     }
 
     Ok(updated)
@@ -596,7 +641,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn control_task_pause_resume_and_stop_with_descendants() {
+    async fn control_task_pause_resume_stop_and_restart_with_descendants() {
         let pool = setup_test_pool().await;
 
         let parent = create_task(
@@ -670,6 +715,21 @@ mod tests {
             .as_deref()
             .unwrap_or_default()
             .contains("stopped_by_user"));
+
+        let restarted = control_task(
+            &pool,
+            ControlTaskInput {
+                task_id: parent.id.clone(),
+                action: TaskControlAction::Restart,
+                include_descendants: Some(true),
+                reason: Some("retry".to_string()),
+            },
+        )
+        .await
+        .expect("restart control should succeed");
+
+        assert!(!restarted.is_empty());
+        assert!(restarted.iter().all(|task| task.status == "pending"));
     }
 
     #[tokio::test]

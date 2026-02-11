@@ -9,7 +9,7 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import TokenBurnChart from '@/components/TokenBurnChart'
 import { useTargetProjectConfig } from '@/hooks/useTargetProjectConfig'
-import { controlTask, getTasks, orchestrateObjective } from '@/hooks/useTauri'
+import { controlTask, executeDomainTask, getTasks, orchestrateObjective } from '@/hooks/useTauri'
 import { useAopStore } from '@/store/aop-store'
 import type { OrchestrationResult, TaskControlAction, TaskRecord } from '@/types'
 
@@ -37,8 +37,75 @@ export function DashboardView() {
       ),
     [tasksMap],
   )
+  const parentByTaskId = useMemo(() => {
+    const result = new Map<string, string | null>()
+    tasks.forEach((task) => {
+      result.set(task.id, task.parentId)
+    })
+    return result
+  }, [tasks])
+  const resumableTaskIds = useMemo(() => {
+    const result = new Set<string>()
+    tasks.forEach((task) => {
+      if (task.status !== 'paused') {
+        return
+      }
 
-  const { targetProject, setTargetProject } = useTargetProjectConfig()
+      let currentId: string | null = task.id
+      while (currentId) {
+        result.add(currentId)
+        currentId = parentByTaskId.get(currentId) ?? null
+      }
+    })
+    return result
+  }, [parentByTaskId, tasks])
+  const pausableTaskIds = useMemo(() => {
+    const result = new Set<string>()
+    tasks.forEach((task) => {
+      if (task.status === 'completed' || task.status === 'failed' || task.status === 'paused') {
+        return
+      }
+
+      let currentId: string | null = task.id
+      while (currentId) {
+        result.add(currentId)
+        currentId = parentByTaskId.get(currentId) ?? null
+      }
+    })
+    return result
+  }, [parentByTaskId, tasks])
+  const stoppableTaskIds = useMemo(() => {
+    const result = new Set<string>()
+    tasks.forEach((task) => {
+      if (task.status === 'completed' || task.status === 'failed') {
+        return
+      }
+
+      let currentId: string | null = task.id
+      while (currentId) {
+        result.add(currentId)
+        currentId = parentByTaskId.get(currentId) ?? null
+      }
+    })
+    return result
+  }, [parentByTaskId, tasks])
+  const restartableTaskIds = useMemo(() => {
+    const result = new Set<string>()
+    tasks.forEach((task) => {
+      if (task.status !== 'failed' && task.status !== 'completed' && task.status !== 'paused') {
+        return
+      }
+
+      let currentId: string | null = task.id
+      while (currentId) {
+        result.add(currentId)
+        currentId = parentByTaskId.get(currentId) ?? null
+      }
+    })
+    return result
+  }, [parentByTaskId, tasks])
+
+  const { targetProject, setTargetProject, mcpConfig } = useTargetProjectConfig()
   const [isLoadingTasks, setIsLoadingTasks] = useState(false)
   const [taskError, setTaskError] = useState<string | null>(null)
 
@@ -136,7 +203,45 @@ export function DashboardView() {
         includeDescendants: true,
         reason: action === 'stop' ? 'manual stop from dashboard' : undefined,
       })
+      if (updatedTasks.length === 0) {
+        setOrchestrationControlError(`No tasks were updated for action '${action}'.`)
+      }
       updatedTasks.forEach((task) => addTask(task))
+
+      if (action === 'restart') {
+        const target = targetProject.trim()
+        if (!target) {
+          setOrchestrationControlError(
+            'Tasks were restarted, but no target project is configured to run Tier 2 agents.',
+          )
+          await loadTasks()
+          return
+        }
+
+        const tier2TaskIds = Array.from(new Set(updatedTasks.filter((task) => task.tier === 2).map((task) => task.id)))
+        const executionResults = await Promise.allSettled(
+          tier2TaskIds.map((taskId) =>
+            executeDomainTask({
+              taskId,
+              targetProject: target,
+              topK: 8,
+              ...mcpConfig,
+            }),
+          ),
+        )
+        const failedExecutions = executionResults.filter((result) => result.status === 'rejected')
+        if (failedExecutions.length > 0) {
+          const firstFailure = failedExecutions[0] as PromiseRejectedResult
+          const message =
+            firstFailure.reason instanceof Error
+              ? firstFailure.reason.message
+              : String(firstFailure.reason)
+          setOrchestrationControlError(
+            `Restarted tasks, but ${failedExecutions.length} Tier 2 execution(s) failed. First error: ${message}`,
+          )
+        }
+      }
+
       await loadTasks()
     } catch (error) {
       setOrchestrationControlError(error instanceof Error ? error.message : String(error))
@@ -164,6 +269,10 @@ export function DashboardView() {
     [tasks],
   )
   const monitoredTaskId = orchestrationResult?.rootTask.id ?? executingTier1TaskId
+  const canPauseMonitoredTask = monitoredTaskId ? pausableTaskIds.has(monitoredTaskId) : false
+  const canResumeMonitoredTask = monitoredTaskId ? resumableTaskIds.has(monitoredTaskId) : false
+  const canStopMonitoredTask = monitoredTaskId ? stoppableTaskIds.has(monitoredTaskId) : false
+  const canRestartMonitoredTask = monitoredTaskId ? restartableTaskIds.has(monitoredTaskId) : false
   const monitoredTask = useMemo(
     () => tasks.find((task) => task.id === monitoredTaskId) ?? null,
     [monitoredTaskId, tasks],
@@ -304,7 +413,7 @@ export function DashboardView() {
 
               <div className="flex flex-wrap gap-2">
                 <Button
-                  disabled={activeControlAction !== null}
+                  disabled={activeControlAction !== null || !canPauseMonitoredTask}
                   onClick={() => void handleOrchestrationControl('pause')}
                   size="sm"
                   type="button"
@@ -313,7 +422,7 @@ export function DashboardView() {
                   {activeControlAction === 'pause' ? 'Pausing...' : 'Pause T1/T2/T3'}
                 </Button>
                 <Button
-                  disabled={activeControlAction !== null}
+                  disabled={activeControlAction !== null || !canResumeMonitoredTask}
                   onClick={() => void handleOrchestrationControl('resume')}
                   size="sm"
                   type="button"
@@ -322,13 +431,22 @@ export function DashboardView() {
                   {activeControlAction === 'resume' ? 'Resuming...' : 'Resume T1/T2/T3'}
                 </Button>
                 <Button
-                  disabled={activeControlAction !== null}
+                  disabled={activeControlAction !== null || !canStopMonitoredTask}
                   onClick={() => void handleOrchestrationControl('stop')}
                   size="sm"
                   type="button"
                   variant="destructive"
                 >
                   {activeControlAction === 'stop' ? 'Stopping...' : 'Stop T1/T2/T3'}
+                </Button>
+                <Button
+                  disabled={activeControlAction !== null || !canRestartMonitoredTask}
+                  onClick={() => void handleOrchestrationControl('restart')}
+                  size="sm"
+                  type="button"
+                  variant="secondary"
+                >
+                  {activeControlAction === 'restart' ? 'Restarting...' : 'Restart T1/T2/T3'}
                 </Button>
               </div>
 
@@ -355,7 +473,7 @@ export function DashboardView() {
             <div className="space-y-2">
               <div className="flex flex-wrap gap-2">
                 <Button
-                  disabled={activeControlAction !== null}
+                  disabled={activeControlAction !== null || !canPauseMonitoredTask}
                   onClick={() => void handleOrchestrationControl('pause')}
                   size="sm"
                   type="button"
@@ -364,7 +482,7 @@ export function DashboardView() {
                   {activeControlAction === 'pause' ? 'Pausing...' : 'Pause T1/T2/T3'}
                 </Button>
                 <Button
-                  disabled={activeControlAction !== null}
+                  disabled={activeControlAction !== null || !canResumeMonitoredTask}
                   onClick={() => void handleOrchestrationControl('resume')}
                   size="sm"
                   type="button"
@@ -373,13 +491,22 @@ export function DashboardView() {
                   {activeControlAction === 'resume' ? 'Resuming...' : 'Resume T1/T2/T3'}
                 </Button>
                 <Button
-                  disabled={activeControlAction !== null}
+                  disabled={activeControlAction !== null || !canStopMonitoredTask}
                   onClick={() => void handleOrchestrationControl('stop')}
                   size="sm"
                   type="button"
                   variant="destructive"
                 >
                   {activeControlAction === 'stop' ? 'Stopping...' : 'Stop T1/T2/T3'}
+                </Button>
+                <Button
+                  disabled={activeControlAction !== null || !canRestartMonitoredTask}
+                  onClick={() => void handleOrchestrationControl('restart')}
+                  size="sm"
+                  type="button"
+                  variant="secondary"
+                >
+                  {activeControlAction === 'restart' ? 'Restarting...' : 'Restart T1/T2/T3'}
                 </Button>
               </div>
               {orchestrationControlError ? (

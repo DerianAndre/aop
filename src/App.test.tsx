@@ -51,6 +51,14 @@ describe('App', () => {
         return []
       }
 
+      if (command === 'list_agent_terminals') {
+        return []
+      }
+
+      if (command === 'list_terminal_events') {
+        return []
+      }
+
       return null
     })
   })
