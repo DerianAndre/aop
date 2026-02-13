@@ -15,13 +15,21 @@ export const useAopStore = create<AopStore>()(
         contextQueries: [],
         selectedTaskId: null,
         selectedMutationId: null,
-        activeTab: 'tasks',
+        activeTab: 'command-center',
         taskFilter: {},
         indexStatus: null,
         sidecarHealth: null,
         targetProject: '',
         mcpCommand: '',
         mcpArgs: '',
+
+        // Command Center state
+        ccRootTaskId: null,
+        ccOrchestrationResult: null,
+        ccInspectorItem: null,
+        ccLiveFeedTab: 'activity',
+        ccInspectorCollapsed: false,
+        ccLiveFeedCollapsed: false,
 
         // Actions
         addTask: (task) =>
@@ -69,6 +77,14 @@ export const useAopStore = create<AopStore>()(
         setMcpCommand: (value) => set({ mcpCommand: value }),
         setMcpArgs: (value) => set({ mcpArgs: value }),
 
+        // Command Center actions
+        setCcRootTaskId: (id) => set({ ccRootTaskId: id }),
+        setCcOrchestrationResult: (result) => set({ ccOrchestrationResult: result }),
+        setCcInspectorItem: (item) => set({ ccInspectorItem: item }),
+        setCcLiveFeedTab: (tab) => set({ ccLiveFeedTab: tab }),
+        toggleCcInspector: () => set((state) => ({ ccInspectorCollapsed: !state.ccInspectorCollapsed })),
+        toggleCcLiveFeed: () => set((state) => ({ ccLiveFeedCollapsed: !state.ccLiveFeedCollapsed })),
+
         handleTauriEvent: (event) => {
           const { addTask, updateTask, addMutation, updateMutation } = get()
 
@@ -105,6 +121,8 @@ export const useAopStore = create<AopStore>()(
           targetProject: state.targetProject,
           mcpCommand: state.mcpCommand,
           mcpArgs: state.mcpArgs,
+          ccLiveFeedCollapsed: state.ccLiveFeedCollapsed,
+          ccInspectorCollapsed: state.ccInspectorCollapsed,
         }),
       }
     )

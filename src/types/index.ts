@@ -392,6 +392,172 @@ export interface ModelRegistrySnapshot {
   config: ModelRoutingConfig
 }
 
+export interface AgentRunRecord {
+  id: string
+  rootTaskId: string | null
+  taskId: string | null
+  tier: number | null
+  actor: string
+  persona: string | null
+  skill: string | null
+  provider: string | null
+  modelId: string | null
+  adapterKind: string | null
+  status: string
+  startedAt: number
+  endedAt: number | null
+  tokensIn: number
+  tokensOut: number
+  tokenDelta: number
+  costUsd: number | null
+  metadataJson: string | null
+}
+
+export interface AgentEventRecord {
+  id: number
+  runId: string | null
+  rootTaskId: string | null
+  taskId: string | null
+  tier: number | null
+  actor: string
+  action: string
+  status: string | null
+  phase: string | null
+  message: string | null
+  provider: string | null
+  modelId: string | null
+  persona: string | null
+  skill: string | null
+  mcpServer: string | null
+  mcpTool: string | null
+  latencyMs: number | null
+  retryCount: number | null
+  tokensIn: number | null
+  tokensOut: number | null
+  tokenDelta: number | null
+  costUsd: number | null
+  payloadJson: string | null
+  createdAt: number
+}
+
+export interface ModelHealthRecord {
+  provider: string
+  modelId: string
+  totalCalls: number
+  successCalls: number
+  failedCalls: number
+  avgLatencyMs: number
+  avgCostUsd: number
+  qualityScore: number
+  lastError: string | null
+  lastUsedAt: number | null
+  updatedAt: number
+}
+
+export interface MissionControlSnapshot {
+  generatedAt: number
+  activeRuns: AgentRunRecord[]
+  recentEvents: AgentEventRecord[]
+  modelHealth: ModelHealthRecord[]
+}
+
+export interface GetMissionControlSnapshotInput {
+  rootTaskId?: string
+  limit?: number
+}
+
+export interface ListAgentRunsInput {
+  rootTaskId?: string
+  taskId?: string
+  actor?: string
+  tier?: number
+  status?: string
+  limit?: number
+}
+
+export interface ListAgentEventsInput {
+  rootTaskId?: string
+  taskId?: string
+  actor?: string
+  action?: string
+  sinceId?: number
+  limit?: number
+}
+
+export type ExecutionScopeType = 'tree' | 'tier' | 'agent'
+
+export interface ControlExecutionScopeInput {
+  rootTaskId: string
+  action: TaskControlAction
+  scopeType: ExecutionScopeType
+  tier?: number
+  agentTaskId?: string
+  reason?: string
+}
+
+export interface RuntimeFlags {
+  devMode: boolean
+  modelAdapterEnabled: boolean
+  modelAdapterStrict: boolean
+  autoApproveBudgetRequests: boolean
+  budgetHeadroomPercent: number
+  budgetAutoMaxPercent: number
+  budgetMinIncrement: number
+  telemetryRetentionDays: number
+}
+
+export type SetRuntimeFlagsInput = Partial<RuntimeFlags>
+
+export interface RuntimeFlagsUpdateResult {
+  flags: RuntimeFlags
+  restartRequired: boolean
+}
+
+export interface GetProviderSecretStatusInput {
+  provider: string
+}
+
+export interface ProviderSecretStatus {
+  provider: string
+  configured: boolean
+  backend: string
+  developerMode: boolean
+}
+
+export interface SetProviderSecretInput {
+  provider: string
+  secret: string
+  sessionToken?: string
+}
+
+export interface SecretOperationResult {
+  provider: string
+  configured: boolean
+  confirmationRequired: boolean
+  confirmationToken?: string | null
+}
+
+export interface RevealProviderSecretInput {
+  provider: string
+  sessionToken?: string
+}
+
+export interface RevealProviderSecretResult {
+  provider: string
+  secret: string
+}
+
+export interface ArchiveTelemetryInput {
+  retentionDays?: number
+}
+
+export interface ArchiveTelemetryResult {
+  retentionDays: number
+  eventsArchived: number
+  runsArchived: number
+  archiveFile: string | null
+}
+
 export interface ContextChunk {
   id: string
   filePath: string

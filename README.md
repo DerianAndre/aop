@@ -71,14 +71,14 @@ pnpm tauri build
 
 ### Model Routing (Multi-Provider)
 
-- Configure models in `aop_models.json`.
+- Configure models in `models.json`.
 - Each tier/persona can define multiple candidate providers/models.
 - Runtime selects the first candidate with an available adapter.
 - Current adapter implemented: `claude_code`.
 
-## Model Config (`aop_models.json`)
+## Model Config (`models.json`)
 
-`aop_models.json` supports:
+`models.json` supports:
 
 - `tiers`: tier default candidates (`1`, `2`, `3`)
 - `personaOverrides`: persona-specific candidates

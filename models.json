@@ -5,21 +5,21 @@
     "1": [
       {
         "provider": "openai",
-        "modelId": "gpt-5"
+        "modelId": "gpt-5.3"
       },
       {
         "provider": "claude_code",
-        "modelId": "sonnet"
+        "modelId": "opus-4-6"
       }
     ],
     "2": [
       {
         "provider": "openai",
-        "modelId": "gpt-5-mini"
+        "modelId": "gpt-5.2"
       },
       {
         "provider": "claude_code",
-        "modelId": "sonnet"
+        "modelId": "sonnet-4-5"
       }
     ],
     "3": [
@@ -29,7 +29,7 @@
       },
       {
         "provider": "claude_code",
-        "modelId": "sonnet"
+        "modelId": "haiku-4-5"
       }
     ]
   },
@@ -41,13 +41,13 @@
       },
       {
         "provider": "claude_code",
-        "modelId": "opus"
+        "modelId": "opus-4-6"
       }
     ],
     "revision_specialist": [
       {
         "provider": "claude_code",
-        "modelId": "sonnet"
+        "modelId": "sonnet-4-5"
       }
     ]
   }

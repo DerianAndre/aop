@@ -1,6 +1,24 @@
-import type { TaskRecord, MutationRecord, ContextChunk } from '@/types'
+import type { TaskRecord, MutationRecord, ContextChunk, OrchestrationResult } from '@/types'
 
-export type AppTab = 'tasks' | 'dashboard' | 'context' | 'mutations' | 'terminal' | 'logs' | 'system'
+export type AppTab =
+  | 'command-center'
+  | 'mission-control'
+  | 'tasks'
+  | 'dashboard'
+  | 'context'
+  | 'mutations'
+  | 'terminal'
+  | 'logs'
+  | 'system'
+
+export type CcPhase = 'empty' | 'planning' | 'ready' | 'running' | 'review' | 'completed'
+
+export type CcLiveFeedTab = 'activity' | 'terminal' | 'budget' | 'errors'
+
+export interface CcInspectorItem {
+  type: 'task' | 'mutation' | 'terminal'
+  id: string
+}
 
 export interface AopStoreState {
   // Core data
@@ -26,6 +44,14 @@ export interface AopStoreState {
   targetProject: string
   mcpCommand: string
   mcpArgs: string
+
+  // Command Center state
+  ccRootTaskId: string | null
+  ccOrchestrationResult: OrchestrationResult | null
+  ccInspectorItem: CcInspectorItem | null
+  ccLiveFeedTab: CcLiveFeedTab
+  ccInspectorCollapsed: boolean
+  ccLiveFeedCollapsed: boolean
 }
 
 export interface ContextQuery {
@@ -73,6 +99,14 @@ export interface AopStoreActions {
   setTargetProject: (value: string) => void
   setMcpCommand: (value: string) => void
   setMcpArgs: (value: string) => void
+
+  // Command Center actions
+  setCcRootTaskId: (id: string | null) => void
+  setCcOrchestrationResult: (result: OrchestrationResult | null) => void
+  setCcInspectorItem: (item: CcInspectorItem | null) => void
+  setCcLiveFeedTab: (tab: CcLiveFeedTab) => void
+  toggleCcInspector: () => void
+  toggleCcLiveFeed: () => void
 
   // Event handler
   handleTauriEvent: (event: AopEvent) => void

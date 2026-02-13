@@ -2,6 +2,7 @@ pub mod budget_requests;
 pub mod metrics;
 pub mod mutations;
 pub mod tasks;
+pub mod telemetry;
 
 use std::path::Path;
 use std::time::Duration;

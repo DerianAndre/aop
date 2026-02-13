@@ -11,10 +11,33 @@ vi.mock('@tauri-apps/api/core', () => ({
 
 describe('App', () => {
   beforeEach(() => {
+    window.localStorage.setItem(
+      'aop-storage',
+      JSON.stringify({
+        state: {
+          activeTab: 'tasks',
+          taskFilter: {},
+          targetProject: '',
+          mcpCommand: '',
+          mcpArgs: '',
+        },
+        version: 0,
+      }),
+    )
+
     invokeMock.mockReset()
     invokeMock.mockImplementation(async (command: string) => {
       if (command === 'get_tasks') {
         return []
+      }
+
+      if (command === 'get_mission_control_snapshot') {
+        return {
+          generatedAt: 1_718_234_567,
+          activeRuns: [],
+          recentEvents: [],
+          modelHealth: [],
+        }
       }
 
       if (command === 'create_task') {
@@ -66,7 +89,12 @@ describe('App', () => {
   it('opens task dialog and creates a task', async () => {
     render(<App />)
 
-    expect(screen.getByRole('heading', { name: /Task Hierarchy/i })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /^Tasks$/i }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: /Task Hierarchy/i })).toBeInTheDocument()
+    })
+
     fireEvent.click(screen.getByRole('button', { name: /New Task/i }))
     expect(screen.getByRole('dialog', { name: /Create Task/i })).toBeInTheDocument()
 

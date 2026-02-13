@@ -18,7 +18,7 @@ flowchart LR
   BRIDGE --> NODE[mcp-bridge Node Sidecar]
   NODE --> TARGET[Target Project Files/MCP Server]
 
-  MODELS --> CONF[aop_models.json]
+  MODELS --> CONF[models.json]
   AGENTS --> ADAPTER[LLM Adapter]
   ADAPTER --> CLAUDE[Claude Code CLI]
 ```
@@ -54,7 +54,7 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-  A[Need model for tier/persona] --> B[Load candidates from aop_models.json]
+  A[Need model for tier/persona] --> B[Load candidates from models.json]
   B --> C{persona override exists?}
   C -- yes --> D[Use persona candidate list]
   C -- no --> E[Use tier candidate list]

@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
@@ -13,9 +14,9 @@ use crate::db::tasks::{
     self, CreateTaskRecordInput, TaskRecord, TaskStatus, UpdateTaskOutcomeInput,
     UpdateTaskStatusInput,
 };
-use crate::llm_adapter;
 use crate::mcp_bridge::client::BridgeClient;
 use crate::mcp_bridge::tool_caller::{self, ReadTargetFileInput};
+use crate::model_intelligence::{self, ModelSelectionRequest};
 use crate::model_registry::ModelRegistry;
 use crate::mutation_pipeline::{self, RunMutationPipelineInput};
 use crate::task_runtime;
@@ -91,11 +92,19 @@ pub async fn orchestrate_and_persist(
 ) -> Result<OrchestrationResult, String> {
     validate_objective_input(&input)?;
 
-    let tier1_model = model_registry.resolve_with_supported_providers(
-        1,
-        None,
-        &llm_adapter::supported_provider_aliases(),
-    )?;
+    let tier1_model = model_intelligence::select_model(
+        pool,
+        model_registry,
+        ModelSelectionRequest {
+            task_id: None,
+            actor: "tier1_orchestrator",
+            tier: 1,
+            persona: None,
+            skill: Some("orchestration_planning"),
+        },
+    )
+    .await?
+    .selection;
     let objective = input.objective.trim().to_string();
     let domain = infer_primary_domain(&objective);
     let target_root = normalize_project_root(&input.target_project)?;
@@ -595,11 +604,19 @@ async fn execute_planned_tier3_task(
     .await?;
 
     let persona = infer_tier3_persona(&task.domain, &task.objective);
-    let tier3_model = model_registry.resolve_with_supported_providers(
-        3,
-        Some(persona.as_str()),
-        &llm_adapter::supported_provider_aliases(),
-    )?;
+    let tier3_model = model_intelligence::select_model(
+        pool,
+        model_registry,
+        ModelSelectionRequest {
+            task_id: Some(task.id.as_str()),
+            actor: "tier1_orchestrator",
+            tier: 3,
+            persona: Some(persona.as_str()),
+            skill: Some("tier3_specialist_spawn"),
+        },
+    )
+    .await?
+    .selection;
 
     let chunks = search::query_codebase(
         pool,
@@ -644,7 +661,37 @@ async fn execute_planned_tier3_task(
         model_id: Some(tier3_model.model_id.clone()),
     };
 
-    let proposal = specialist::run_specialist_task(&specialist_task, file_content.as_deref())?;
+    let model_started_at = Instant::now();
+    let proposal = specialist::run_specialist_task(&specialist_task, file_content.as_deref());
+    let model_elapsed = model_started_at.elapsed().as_millis() as i64;
+    let proposal = match proposal {
+        Ok(value) => {
+            model_intelligence::record_model_call_outcome(
+                pool,
+                tier3_model.provider.as_str(),
+                tier3_model.model_id.as_str(),
+                true,
+                Some(model_elapsed),
+                None,
+                None,
+            )
+            .await;
+            value
+        }
+        Err(error) => {
+            model_intelligence::record_model_call_outcome(
+                pool,
+                tier3_model.provider.as_str(),
+                tier3_model.model_id.as_str(),
+                false,
+                Some(model_elapsed),
+                None,
+                Some(error.clone()),
+            )
+            .await;
+            return Err(error);
+        }
+    };
     let _mutation = mutations::create_mutation(
         pool,
         CreateMutationInput {

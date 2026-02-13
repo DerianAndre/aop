@@ -1,10 +1,15 @@
 import { invoke } from '@tauri-apps/api/core'
 
 import type {
+  AgentEventRecord,
+  AgentRunRecord,
   AgentTerminalSession,
+  ArchiveTelemetryInput,
+  ArchiveTelemetryResult,
   ApproveOrchestrationPlanInput,
   AuditLogEntry,
   BudgetRequestRecord,
+  ControlExecutionScopeInput,
   CreateTaskInput,
   ContextChunk,
   ControlTaskInput,
@@ -15,6 +20,8 @@ import type {
   IntentSummary,
   ListAuditLogInput,
   ListAgentTerminalsInput,
+  ListAgentEventsInput,
+  ListAgentRunsInput,
   ListTaskBudgetRequestsInput,
   ListTaskActivityInput,
   ListTerminalEventsInput,
@@ -23,6 +30,7 @@ import type {
   MutationPipelineResult,
   MutationRecord,
   ModelRegistrySnapshot,
+  MissionControlSnapshot,
   MutationRevisionResult,
   OrchestrationResult,
   PlanExecutionResult,
@@ -33,6 +41,16 @@ import type {
   ResolveTaskBudgetRequestInput,
   RunMutationPipelineInput,
   SearchResult,
+  SetProviderSecretInput,
+  SecretOperationResult,
+  RevealProviderSecretInput,
+  RevealProviderSecretResult,
+  RuntimeFlags,
+  RuntimeFlagsUpdateResult,
+  SetRuntimeFlagsInput,
+  GetProviderSecretStatusInput,
+  ProviderSecretStatus,
+  GetMissionControlSnapshotInput,
   SearchTargetFilesInput,
   SetMutationStatusInput,
   TerminalEventRecord,
@@ -140,4 +158,44 @@ export async function queryCodebase(input: QueryCodebaseInput): Promise<ContextC
 
 export async function getModelRegistry(): Promise<ModelRegistrySnapshot> {
   return invoke<ModelRegistrySnapshot>('get_model_registry')
+}
+
+export async function getMissionControlSnapshot(input: GetMissionControlSnapshotInput): Promise<MissionControlSnapshot> {
+  return invoke<MissionControlSnapshot>('get_mission_control_snapshot', { input })
+}
+
+export async function listAgentRuns(input: ListAgentRunsInput): Promise<AgentRunRecord[]> {
+  return invoke<AgentRunRecord[]>('list_agent_runs', { input })
+}
+
+export async function listAgentEvents(input: ListAgentEventsInput): Promise<AgentEventRecord[]> {
+  return invoke<AgentEventRecord[]>('list_agent_events', { input })
+}
+
+export async function controlExecutionScope(input: ControlExecutionScopeInput): Promise<TaskRecord[]> {
+  return invoke<TaskRecord[]>('control_execution_scope', { input })
+}
+
+export async function getRuntimeFlags(): Promise<RuntimeFlags> {
+  return invoke<RuntimeFlags>('get_runtime_flags')
+}
+
+export async function setRuntimeFlags(input: SetRuntimeFlagsInput): Promise<RuntimeFlagsUpdateResult> {
+  return invoke<RuntimeFlagsUpdateResult>('set_runtime_flags', { input })
+}
+
+export async function getProviderSecretStatus(input: GetProviderSecretStatusInput): Promise<ProviderSecretStatus> {
+  return invoke<ProviderSecretStatus>('get_provider_secret_status', { input })
+}
+
+export async function setProviderSecret(input: SetProviderSecretInput): Promise<SecretOperationResult> {
+  return invoke<SecretOperationResult>('set_provider_secret', { input })
+}
+
+export async function revealProviderSecret(input: RevealProviderSecretInput): Promise<RevealProviderSecretResult> {
+  return invoke<RevealProviderSecretResult>('reveal_provider_secret', { input })
+}
+
+export async function archiveTelemetry(input: ArchiveTelemetryInput): Promise<ArchiveTelemetryResult> {
+  return invoke<ArchiveTelemetryResult>('archive_telemetry', { input })
 }

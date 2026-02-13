@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
@@ -11,9 +12,9 @@ use crate::db::mutations::{self, CreateMutationInput};
 use crate::db::tasks::{
     self, CreateTaskRecordInput, TaskStatus, UpdateTaskOutcomeInput, UpdateTaskStatusInput,
 };
-use crate::llm_adapter;
 use crate::mcp_bridge::client::BridgeClient;
 use crate::mcp_bridge::tool_caller::{self, ReadTargetFileInput, SearchTargetFilesInput};
+use crate::model_intelligence::{self, ModelSelectionRequest};
 use crate::model_registry::ModelRegistry;
 use crate::task_runtime;
 use crate::vector::search;
@@ -59,11 +60,19 @@ pub async fn execute_domain_task(
     input: ExecuteDomainTaskInput,
 ) -> Result<IntentSummary, String> {
     validate_input(&input)?;
-    let tier2_model = model_registry.resolve_with_supported_providers(
-        2,
-        None,
-        &llm_adapter::supported_provider_aliases(),
-    )?;
+    let tier2_model = model_intelligence::select_model(
+        pool,
+        model_registry,
+        ModelSelectionRequest {
+            task_id: Some(input.task_id.trim()),
+            actor: "tier2_domain_leader",
+            tier: 2,
+            persona: None,
+            skill: Some("domain_coordination"),
+        },
+    )
+    .await?
+    .selection;
     let task = tasks::get_task_by_id(pool, input.task_id.trim()).await?;
 
     if task.tier != 2 {
@@ -150,11 +159,6 @@ pub async fn execute_domain_task(
 
         let specialist_objective =
             build_specialist_objective(&task.domain, &task.objective, persona.as_str(), idx);
-        let specialist_model = model_registry.resolve_with_supported_providers(
-            3,
-            Some(persona.as_str()),
-            &llm_adapter::supported_provider_aliases(),
-        )?;
         let target_file = candidate_files
             .get(if candidate_files.is_empty() {
                 0
@@ -188,6 +192,19 @@ pub async fn execute_domain_task(
             ),
         )
         .await?;
+        let specialist_model = model_intelligence::select_model(
+            pool,
+            model_registry,
+            ModelSelectionRequest {
+                task_id: Some(specialist_task_record.id.as_str()),
+                actor: "tier2_domain_leader",
+                tier: 3,
+                persona: Some(persona.as_str()),
+                skill: Some("specialist_assignment"),
+            },
+        )
+        .await?
+        .selection;
 
         let file_content = read_file_with_fallback(bridge_client, &input, &target_file).await;
         task_runtime::cooperative_checkpoint(
@@ -246,8 +263,19 @@ pub async fn execute_domain_task(
             model_id: Some(specialist_model.model_id.clone()),
         };
 
+        let model_started_at = Instant::now();
         match specialist::run_specialist_task(&specialist_task, file_content.as_deref()) {
             Ok(proposal) => {
+                model_intelligence::record_model_call_outcome(
+                    pool,
+                    specialist_model.provider.as_str(),
+                    specialist_model.model_id.as_str(),
+                    true,
+                    Some(model_started_at.elapsed().as_millis() as i64),
+                    None,
+                    None,
+                )
+                .await;
                 if let Err(error) = task_runtime::cooperative_checkpoint(
                     pool,
                     &task.id,
@@ -330,6 +358,16 @@ pub async fn execute_domain_task(
                 proposals.push(proposal);
             }
             Err(error) => {
+                model_intelligence::record_model_call_outcome(
+                    pool,
+                    specialist_model.provider.as_str(),
+                    specialist_model.model_id.as_str(),
+                    false,
+                    Some(model_started_at.elapsed().as_millis() as i64),
+                    None,
+                    Some(error.clone()),
+                )
+                .await;
                 let specialist_task_id = specialist_task_record.id.clone();
                 tasks::update_task_outcome(
                     pool,

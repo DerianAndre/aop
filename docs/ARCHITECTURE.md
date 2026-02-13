@@ -57,7 +57,7 @@ AOP is a desktop orchestration system that plans, analyzes, proposes, validates,
 
 ### 7) Model Routing + Adapter
 
-- `model_registry.rs`: resolves model by tier/persona from `aop_models.json`.
+- `model_registry.rs`: resolves model by tier/persona from `models.json`.
 - `llm_adapter.rs`: provider adapter execution.
   - current implemented adapter: `claude_code`.
 - resolution supports multiple provider candidates and picks first available adapter.
@@ -96,7 +96,7 @@ SQLite is source of truth for:
 
 ## Configuration
 
-### `aop_models.json`
+### `models.json`
 
 - `tiers` and `personaOverrides` accept candidate lists.
 - Runtime resolves using available adapters.

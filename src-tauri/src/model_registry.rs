@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-const CONFIG_FILE_NAME: &str = "aop_models.json";
+const CONFIG_FILE_NAME: &str = "models.json";
 const CONFIG_PATH_ENV: &str = "AOP_MODEL_CONFIG_PATH";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -232,6 +232,89 @@ impl ModelRegistry {
             model_id: profile.model_id.clone(),
             source: "default".to_string(),
         })
+    }
+
+    pub fn candidates_with_supported_providers(
+        &self,
+        tier: u8,
+        persona: Option<&str>,
+        supported_providers: &[String],
+    ) -> Result<Vec<ModelProfile>, String> {
+        if !(1..=3).contains(&tier) {
+            return Err("tier must be 1, 2, or 3".to_string());
+        }
+
+        let normalized_persona = persona
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_ascii_lowercase());
+        let supported_set = supported_providers
+            .iter()
+            .map(|value| normalize_provider(value))
+            .collect::<HashSet<_>>();
+        let filter_by_adapter = !supported_set.is_empty();
+
+        let mut result = Vec::new();
+        let mut seen = HashSet::new();
+
+        if let Some(persona_key) = &normalized_persona {
+            if let Some(candidates) = self.config.persona_overrides.get(persona_key) {
+                for profile in candidates {
+                    let provider = normalize_provider(profile.provider.as_str());
+                    if filter_by_adapter && !supported_set.contains(&provider) {
+                        continue;
+                    }
+                    let key = format!(
+                        "{}::{}",
+                        provider,
+                        profile.model_id.trim().to_ascii_lowercase()
+                    );
+                    if seen.insert(key) {
+                        result.push(profile.clone());
+                    }
+                }
+            }
+        }
+
+        let tier_key = tier.to_string();
+        if let Some(candidates) = self.config.tiers.get(&tier_key) {
+            for profile in candidates {
+                let provider = normalize_provider(profile.provider.as_str());
+                if filter_by_adapter && !supported_set.contains(&provider) {
+                    continue;
+                }
+                let key = format!(
+                    "{}::{}",
+                    provider,
+                    profile.model_id.trim().to_ascii_lowercase()
+                );
+                if seen.insert(key) {
+                    result.push(profile.clone());
+                }
+            }
+        }
+
+        if result.is_empty() {
+            let defaults = default_tier_profiles();
+            if let Some(candidates) = defaults.get(&tier_key) {
+                for profile in candidates {
+                    let provider = normalize_provider(profile.provider.as_str());
+                    if filter_by_adapter && !supported_set.contains(&provider) {
+                        continue;
+                    }
+                    let key = format!(
+                        "{}::{}",
+                        provider,
+                        profile.model_id.trim().to_ascii_lowercase()
+                    );
+                    if seen.insert(key) {
+                        result.push(profile.clone());
+                    }
+                }
+            }
+        }
+
+        Ok(result)
     }
 }
 

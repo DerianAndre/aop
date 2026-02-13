@@ -1,11 +1,6 @@
 import * as React from "react";
 import {
-  Target,
-  LayoutDashboard,
-  Brain,
-  GitPullRequest,
-  TerminalSquare,
-  FileText,
+  Command,
   Settings,
   Activity,
 } from "lucide-react";
@@ -26,40 +21,10 @@ import type { AppTab } from "@/store/types";
 
 const navItems = [
   {
-    title: "Dashboard",
+    title: "Command Center",
     url: "#",
-    icon: LayoutDashboard,
-    value: "dashboard" as AppTab,
-  },
-  {
-    title: "Tasks",
-    url: "#",
-    icon: Target,
-    value: "tasks" as AppTab,
-  },
-  {
-    title: "Context",
-    url: "#",
-    icon: Brain,
-    value: "context" as AppTab,
-  },
-  {
-    title: "Mutations",
-    url: "#",
-    icon: GitPullRequest,
-    value: "mutations" as AppTab,
-  },
-  {
-    title: "Terminal",
-    url: "#",
-    icon: TerminalSquare,
-    value: "terminal" as AppTab,
-  },
-  {
-    title: "Logs",
-    url: "#",
-    icon: FileText,
-    value: "logs" as AppTab,
+    icon: Command,
+    value: "command-center" as AppTab,
   },
 ];
 

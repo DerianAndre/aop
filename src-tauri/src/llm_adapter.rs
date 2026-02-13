@@ -2,10 +2,11 @@ use std::collections::HashMap;
 use std::process::Command;
 
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 const CLAUDE_CODE_PROVIDER_ALIASES: &[&str] =
     &["claude_code", "claude-code", "anthropic_claude_code"];
+const OPENAI_PROVIDER_ALIASES: &[&str] = &["openai", "openai_api"];
 
 #[derive(Debug, Clone)]
 pub struct AdapterRequest {
@@ -55,8 +56,18 @@ struct ClaudePrintResult {
 }
 
 pub fn generate(request: &AdapterRequest) -> Result<AdapterResponse, String> {
-    if supports_provider(&request.provider) {
+    let normalized = normalize_provider(&request.provider);
+    if CLAUDE_CODE_PROVIDER_ALIASES
+        .iter()
+        .any(|alias| normalized == *alias)
+    {
         return call_claude_code(request);
+    }
+    if OPENAI_PROVIDER_ALIASES
+        .iter()
+        .any(|alias| normalized == *alias)
+    {
+        return call_openai_chat_completions(request);
     }
 
     Err(format!(
@@ -67,16 +78,37 @@ pub fn generate(request: &AdapterRequest) -> Result<AdapterResponse, String> {
 
 pub fn supports_provider(provider: &str) -> bool {
     let normalized = normalize_provider(provider);
-    CLAUDE_CODE_PROVIDER_ALIASES
+    if CLAUDE_CODE_PROVIDER_ALIASES
         .iter()
         .any(|alias| normalized == *alias)
+    {
+        return true;
+    }
+    if OPENAI_PROVIDER_ALIASES
+        .iter()
+        .any(|alias| normalized == *alias)
+    {
+        return std::env::var("OPENAI_API_KEY")
+            .ok()
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false);
+    }
+    false
 }
 
 pub fn supported_provider_aliases() -> Vec<String> {
-    CLAUDE_CODE_PROVIDER_ALIASES
+    let mut values = CLAUDE_CODE_PROVIDER_ALIASES
         .iter()
         .map(|value| value.to_string())
-        .collect()
+        .collect::<Vec<_>>();
+    if std::env::var("OPENAI_API_KEY")
+        .ok()
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+    {
+        values.extend(OPENAI_PROVIDER_ALIASES.iter().map(|value| value.to_string()));
+    }
+    values
 }
 
 fn normalize_provider(provider: &str) -> String {
@@ -155,6 +187,83 @@ fn call_claude_code(request: &AdapterRequest) -> Result<AdapterResponse, String>
     })
 }
 
+fn call_openai_chat_completions(request: &AdapterRequest) -> Result<AdapterResponse, String> {
+    if request.model_id.trim().is_empty() {
+        return Err("Model adapter requires non-empty modelId".to_string());
+    }
+    let api_key = std::env::var("OPENAI_API_KEY")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "OPENAI_API_KEY is required for openai provider".to_string())?;
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|error| format!("Failed to build OpenAI HTTP client: {error}"))?;
+
+    let body = json!({
+        "model": request.model_id.trim(),
+        "messages": [
+            { "role": "system", "content": request.system_prompt.trim() },
+            { "role": "user", "content": request.user_prompt.trim() }
+        ],
+        "temperature": 0.2
+    });
+    let response = client
+        .post("https://api.openai.com/v1/chat/completions")
+        .bearer_auth(api_key)
+        .json(&body)
+        .send()
+        .map_err(|error| format!("Failed to call OpenAI API: {error}"))?;
+
+    let status = response.status();
+    let payload: Value = response
+        .json()
+        .map_err(|error| format!("Invalid OpenAI response payload: {error}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "OpenAI adapter failed with status {}: {}",
+            status,
+            payload
+        ));
+    }
+
+    let text = payload
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|choices| choices.first())
+        .and_then(|choice| choice.get("message"))
+        .and_then(|message| message.get("content"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("OpenAI response did not include assistant content: {payload}"))?
+        .to_string();
+
+    let input_tokens = payload
+        .get("usage")
+        .and_then(|usage| usage.get("prompt_tokens"))
+        .and_then(Value::as_u64)
+        .map(|value| value as u32);
+    let output_tokens = payload
+        .get("usage")
+        .and_then(|usage| usage.get("completion_tokens"))
+        .and_then(Value::as_u64)
+        .map(|value| value as u32);
+
+    Ok(AdapterResponse {
+        text,
+        input_tokens,
+        output_tokens,
+        total_cost_usd: None,
+        resolved_model: payload
+            .get("model")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+    })
+}
+
 fn read_optional_max_budget() -> Option<String> {
     let raw = std::env::var("AOP_CLAUDE_MAX_BUDGET_USD").ok()?;
     let value = raw.trim();
@@ -198,7 +307,7 @@ mod tests {
     #[test]
     fn generate_rejects_unknown_provider() {
         let request = AdapterRequest {
-            provider: "openai".to_string(),
+            provider: "unsupported_provider".to_string(),
             model_id: "gpt-5-mini".to_string(),
             system_prompt: "system".to_string(),
             user_prompt: "user".to_string(),
