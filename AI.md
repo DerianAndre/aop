@@ -41,7 +41,7 @@ Machine-to-machine compact context for this repository.
 
 ## Model Routing Contract
 
-Config file: `aop_models.json` (`version: 2`).
+Config file: `models.json` (`version: 2`).
 
 - `tiers.<1|2|3>`: `ModelProfile | ModelProfile[]`
 - `personaOverrides.<persona>`: `ModelProfile | ModelProfile[]`
