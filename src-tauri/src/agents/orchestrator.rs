@@ -5,10 +5,22 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
-use crate::db::tasks::{self, CreateTaskRecordInput, TaskRecord, TaskStatus};
+use crate::agents::domain_leader::{self, ExecuteDomainTaskInput};
+use crate::agents::specialist::{self, SpecialistTask};
+use crate::agents::CodeBlock;
+use crate::db::mutations::{self, CreateMutationInput, ListTaskMutationsInput, MutationStatus};
+use crate::db::tasks::{
+    self, CreateTaskRecordInput, TaskRecord, TaskStatus, UpdateTaskOutcomeInput,
+    UpdateTaskStatusInput,
+};
 use crate::llm_adapter;
+use crate::mcp_bridge::client::BridgeClient;
+use crate::mcp_bridge::tool_caller::{self, ReadTargetFileInput};
 use crate::model_registry::ModelRegistry;
+use crate::mutation_pipeline::{self, RunMutationPipelineInput};
 use crate::task_runtime;
+use crate::vector::search;
+use crate::vector::ContextChunk;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -45,8 +57,31 @@ pub struct OrchestrationResult {
 
 #[derive(Debug, Clone)]
 struct AssignmentDraft {
+    tier: u8,
     domain: String,
     objective: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApproveOrchestrationPlanInput {
+    pub root_task_id: String,
+    pub target_project: String,
+    pub top_k: Option<u32>,
+    pub mcp_command: Option<String>,
+    pub mcp_args: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanExecutionResult {
+    pub root_task: TaskRecord,
+    pub executed_task_ids: Vec<String>,
+    pub tier2_executions: u32,
+    pub tier3_executions: u32,
+    pub applied_mutations: u32,
+    pub failed_executions: u32,
+    pub message: String,
 }
 
 pub async fn orchestrate_and_persist(
@@ -63,10 +98,16 @@ pub async fn orchestrate_and_persist(
     )?;
     let objective = input.objective.trim().to_string();
     let domain = infer_primary_domain(&objective);
-    let assignment_count = desired_assignment_count(&objective);
-    let drafts = build_assignment_drafts(&domain, assignment_count);
     let target_root = normalize_project_root(&input.target_project)?;
     let all_candidate_files = collect_source_files(&target_root, 600)?;
+    let complexity_score = estimate_objective_complexity(
+        &objective,
+        &domain,
+        all_candidate_files.len(),
+        input.max_risk_tolerance,
+    );
+    let assignment_count = desired_assignment_count(&objective, complexity_score);
+    let drafts = build_assignment_drafts(&domain, assignment_count, complexity_score);
 
     let overhead_budget = ((input.global_token_budget as f32) * 0.10).round() as u32;
     let reserve_budget = ((input.global_token_budget as f32) * 0.10).round() as u32;
@@ -121,10 +162,11 @@ pub async fn orchestrate_and_persist(
         "orchestration_context_built",
         &root_task.id,
         &format!(
-            "assignmentCount={} candidateFiles={} distributedBudget={}",
+            "assignmentCount={} candidateFiles={} distributedBudget={} complexity={:.2}",
             drafts.len(),
             all_candidate_files.len(),
-            distributed_budget
+            distributed_budget,
+            complexity_score
         ),
     )
     .await?;
@@ -179,12 +221,12 @@ pub async fn orchestrate_and_persist(
             pool,
             CreateTaskRecordInput {
                 parent_id: Some(root_task.id.clone()),
-                tier: 2,
+                tier: i64::from(draft.tier),
                 domain: draft.domain.clone(),
                 objective: draft.objective.clone(),
                 token_budget: budgets[idx].max(1) as i64,
                 risk_factor: f64::from(*risk_factor),
-                status: TaskStatus::Pending,
+                status: TaskStatus::Paused,
             },
         )
         .await?;
@@ -192,11 +234,12 @@ pub async fn orchestrate_and_persist(
         task_runtime::record_task_activity(
             pool,
             "tier1_orchestrator",
-            "tier2_assignment_created",
+            "plan_assignment_created",
             &created.id,
             &format!(
-                "parent={} domain={} risk={:.3} tokenBudget={} files={} constraints={}",
+                "parent={} tier={} domain={} risk={:.3} tokenBudget={} files={} constraints={}",
                 root_task.id,
+                draft.tier,
                 draft.domain,
                 risk_factor,
                 budgets[idx],
@@ -209,7 +252,7 @@ pub async fn orchestrate_and_persist(
         assignments.push(TaskAssignment {
             task_id: created.id,
             parent_id: root_task.id.clone(),
-            tier: 2,
+            tier: draft.tier,
             domain: draft.domain.clone(),
             objective: draft.objective.clone(),
             token_budget: budgets[idx],
@@ -223,18 +266,20 @@ pub async fn orchestrate_and_persist(
         pool,
         tasks::UpdateTaskStatusInput {
             task_id: root_task.id.clone(),
-            status: TaskStatus::Completed,
-            error_message: None,
+            status: TaskStatus::Paused,
+            error_message: Some(
+                "plan_ready: awaiting review approval before spawning agents".to_string(),
+            ),
         },
     )
     .await?;
     task_runtime::record_task_activity(
         pool,
         "tier1_orchestrator",
-        "orchestration_completed",
+        "orchestration_plan_ready",
         &root_task.id,
         &format!(
-            "assignments={} reserveBudget={}",
+            "assignments={} reserveBudget={} nextStep=execute_tier2_and_apply_mutations",
             assignments.len(),
             reserve_budget
         ),
@@ -250,6 +295,553 @@ pub async fn orchestrate_and_persist(
     })
 }
 
+pub async fn approve_plan_and_spawn(
+    pool: &SqlitePool,
+    bridge_client: &BridgeClient,
+    model_registry: &ModelRegistry,
+    input: ApproveOrchestrationPlanInput,
+) -> Result<PlanExecutionResult, String> {
+    validate_approve_input(&input)?;
+
+    let root_task_id = input.root_task_id.trim();
+    let root_task = tasks::get_task_by_id(pool, root_task_id).await?;
+    if root_task.tier != 1 {
+        return Err(format!(
+            "Task '{}' is tier {}. approve_orchestration_plan only supports tier 1 tasks.",
+            root_task.id, root_task.tier
+        ));
+    }
+
+    let task_tree_ids = tasks::collect_task_tree_ids(pool, root_task_id).await?;
+    let mut planned_tasks = Vec::new();
+    for task_id in task_tree_ids.iter().skip(1) {
+        let task = tasks::get_task_by_id(pool, task_id).await?;
+        if !matches!(task.tier, 2 | 3) {
+            continue;
+        }
+        if !matches!(task.status.as_str(), "paused" | "pending") {
+            continue;
+        }
+        planned_tasks.push(task);
+    }
+
+    if planned_tasks.is_empty() {
+        return Err(format!(
+            "Root task '{}' has no paused or pending tier 2/3 assignments to execute.",
+            root_task.id
+        ));
+    }
+
+    tasks::update_task_status(
+        pool,
+        UpdateTaskStatusInput {
+            task_id: root_task.id.clone(),
+            status: TaskStatus::Executing,
+            error_message: None,
+        },
+    )
+    .await?;
+
+    task_runtime::record_task_activity(
+        pool,
+        "tier1_orchestrator",
+        "orchestration_spawn_started",
+        &root_task.id,
+        &format!(
+            "plannedAssignments={} targetProject={} topK={}",
+            planned_tasks.len(),
+            input.target_project.trim(),
+            input.top_k.unwrap_or(8).max(3)
+        ),
+    )
+    .await?;
+
+    planned_tasks.sort_by(|left, right| {
+        right
+            .risk_factor
+            .partial_cmp(&left.risk_factor)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| right.tier.cmp(&left.tier))
+            .then_with(|| left.created_at.cmp(&right.created_at))
+    });
+
+    let mut executed_task_ids = Vec::new();
+    let mut tier2_executions = 0_u32;
+    let mut tier3_executions = 0_u32;
+    let mut applied_mutations = 0_u32;
+    let mut failed_executions = 0_u32;
+    let mut notes: Vec<String> = Vec::new();
+
+    for planned_task in planned_tasks {
+        let execution = if planned_task.tier == 2 {
+            tier2_executions = tier2_executions.saturating_add(1);
+            domain_leader::execute_domain_task(
+                pool,
+                bridge_client,
+                model_registry,
+                ExecuteDomainTaskInput {
+                    task_id: planned_task.id.clone(),
+                    target_project: input.target_project.trim().to_string(),
+                    top_k: input.top_k,
+                    mcp_command: input.mcp_command.clone(),
+                    mcp_args: input.mcp_args.clone(),
+                },
+            )
+            .await
+            .map(|_summary| ())
+        } else {
+            tier3_executions = tier3_executions.saturating_add(1);
+            execute_planned_tier3_task(pool, bridge_client, model_registry, &planned_task, &input)
+                .await
+        };
+
+        if let Err(error) = execution {
+            failed_executions = failed_executions.saturating_add(1);
+            notes.push(format!("task {} failed: {error}", planned_task.id));
+            let _ = task_runtime::record_task_activity(
+                pool,
+                "tier1_orchestrator",
+                "assignment_execution_failed",
+                &planned_task.id,
+                &error,
+            )
+            .await;
+            continue;
+        }
+
+        executed_task_ids.push(planned_task.id.clone());
+        let apply_summary =
+            apply_mutations_for_task(pool, &planned_task.id, input.target_project.trim()).await?;
+        applied_mutations = applied_mutations.saturating_add(apply_summary.applied_mutations);
+        if apply_summary.failed_runs > 0 {
+            failed_executions = failed_executions.saturating_add(1);
+            if let Some(first_error) = apply_summary.first_error {
+                notes.push(format!(
+                    "task {} apply failures={} firstError={}",
+                    planned_task.id, apply_summary.failed_runs, first_error
+                ));
+            } else {
+                notes.push(format!(
+                    "task {} apply failures={}",
+                    planned_task.id, apply_summary.failed_runs
+                ));
+            }
+        } else if apply_summary.applied_mutations == 0 {
+            notes.push(format!(
+                "task {} produced no applied mutations (review gate or no candidates).",
+                planned_task.id
+            ));
+        }
+    }
+
+    let message = format!(
+        "Executed={} (tier2={} tier3={}) appliedMutations={} failedExecutions={}. {}",
+        executed_task_ids.len(),
+        tier2_executions,
+        tier3_executions,
+        applied_mutations,
+        failed_executions,
+        if notes.is_empty() {
+            "All planned assignments completed without critical errors.".to_string()
+        } else {
+            notes.join(" | ")
+        }
+    );
+
+    let (final_status, final_error_message) = if failed_executions > 0 && applied_mutations == 0 {
+        (TaskStatus::Failed, Some(message.clone()))
+    } else if failed_executions > 0 {
+        (TaskStatus::Paused, Some(message.clone()))
+    } else if applied_mutations > 0 {
+        (TaskStatus::Completed, None)
+    } else {
+        (TaskStatus::Paused, Some(message.clone()))
+    };
+
+    let updated_root = tasks::update_task_status(
+        pool,
+        UpdateTaskStatusInput {
+            task_id: root_task.id.clone(),
+            status: final_status,
+            error_message: final_error_message,
+        },
+    )
+    .await?;
+
+    task_runtime::record_task_activity(
+        pool,
+        "tier1_orchestrator",
+        "orchestration_spawn_completed",
+        &root_task.id,
+        &format!(
+            "executed={} tier2={} tier3={} appliedMutations={} failedExecutions={}",
+            executed_task_ids.len(),
+            tier2_executions,
+            tier3_executions,
+            applied_mutations,
+            failed_executions
+        ),
+    )
+    .await?;
+
+    Ok(PlanExecutionResult {
+        root_task: updated_root,
+        executed_task_ids,
+        tier2_executions,
+        tier3_executions,
+        applied_mutations,
+        failed_executions,
+        message,
+    })
+}
+
+#[derive(Debug, Clone)]
+struct MutationApplySummary {
+    applied_mutations: u32,
+    failed_runs: u32,
+    first_error: Option<String>,
+}
+
+async fn apply_mutations_for_task(
+    pool: &SqlitePool,
+    task_id: &str,
+    target_project: &str,
+) -> Result<MutationApplySummary, String> {
+    let mutations = mutations::list_mutations_for_task(
+        pool,
+        ListTaskMutationsInput {
+            task_id: task_id.to_string(),
+        },
+    )
+    .await?;
+
+    let mut applied_mutations = 0_u32;
+    let mut failed_runs = 0_u32;
+    let mut first_error: Option<String> = None;
+
+    for mutation in mutations {
+        if !matches!(
+            mutation.status.as_str(),
+            "proposed" | "validated" | "validated_no_tests"
+        ) {
+            continue;
+        }
+
+        match mutation_pipeline::run_mutation_pipeline(
+            pool,
+            RunMutationPipelineInput {
+                mutation_id: mutation.id.clone(),
+                target_project: target_project.to_string(),
+                tier1_approved: true,
+                ci_command: None,
+                ci_args: None,
+            },
+        )
+        .await
+        {
+            Ok(result) => {
+                if result.mutation.status == MutationStatus::Applied.as_str() {
+                    applied_mutations = applied_mutations.saturating_add(1);
+                } else {
+                    failed_runs = failed_runs.saturating_add(1);
+                    if first_error.is_none() {
+                        first_error = Some(
+                            result
+                                .mutation
+                                .rejection_reason
+                                .clone()
+                                .or(result.task.error_message.clone())
+                                .unwrap_or_else(|| {
+                                    format!(
+                                        "mutation {} finished with status {}",
+                                        result.mutation.id, result.mutation.status
+                                    )
+                                }),
+                        );
+                    }
+                }
+            }
+            Err(error) => {
+                failed_runs = failed_runs.saturating_add(1);
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
+        }
+    }
+
+    Ok(MutationApplySummary {
+        applied_mutations,
+        failed_runs,
+        first_error,
+    })
+}
+
+async fn execute_planned_tier3_task(
+    pool: &SqlitePool,
+    bridge_client: &BridgeClient,
+    model_registry: &ModelRegistry,
+    task: &TaskRecord,
+    input: &ApproveOrchestrationPlanInput,
+) -> Result<(), String> {
+    tasks::update_task_status(
+        pool,
+        UpdateTaskStatusInput {
+            task_id: task.id.clone(),
+            status: TaskStatus::Executing,
+            error_message: None,
+        },
+    )
+    .await?;
+
+    let persona = infer_tier3_persona(&task.domain, &task.objective);
+    let tier3_model = model_registry.resolve_with_supported_providers(
+        3,
+        Some(persona.as_str()),
+        &llm_adapter::supported_provider_aliases(),
+    )?;
+
+    let chunks = search::query_codebase(
+        pool,
+        input.target_project.trim(),
+        task.objective.trim(),
+        input.top_k.unwrap_or(8).max(3),
+    )
+    .await
+    .unwrap_or_default();
+    let target_file = select_tier3_target_file(&chunks, &task.domain, &task.objective)
+        .unwrap_or_else(|| "src/App.tsx".to_string());
+    let code_context = hydrate_tier3_code_context(&chunks, &target_file, 2);
+    let file_content = read_tier3_file_with_fallback(bridge_client, input, &target_file).await;
+
+    task_runtime::record_task_activity(
+        pool,
+        "tier1_orchestrator",
+        "tier3_planned_execution_started",
+        &task.id,
+        &format!(
+            "persona={} model={}/{} targetFile={}",
+            persona, tier3_model.provider, tier3_model.model_id, target_file
+        ),
+    )
+    .await?;
+
+    let specialist_task = SpecialistTask {
+        task_id: task.id.clone(),
+        parent_id: task.parent_id.clone().unwrap_or_else(|| task.id.clone()),
+        tier: 3,
+        persona: persona.clone(),
+        objective: task.objective.clone(),
+        token_budget: task.token_budget.max(1) as u32,
+        target_files: vec![target_file.clone()],
+        code_context,
+        constraints: vec![
+            "plan approved by tier1 orchestrator".to_string(),
+            "keep diff focused to task objective".to_string(),
+            "preserve external behavior unless explicitly requested".to_string(),
+        ],
+        model_provider: Some(tier3_model.provider.clone()),
+        model_id: Some(tier3_model.model_id.clone()),
+    };
+
+    let proposal = specialist::run_specialist_task(&specialist_task, file_content.as_deref())?;
+    let _mutation = mutations::create_mutation(
+        pool,
+        CreateMutationInput {
+            task_id: task.id.clone(),
+            agent_uid: proposal.agent_uid.clone(),
+            file_path: proposal.file_path.clone(),
+            diff_content: proposal.diff_content.clone(),
+            intent_description: Some(proposal.intent_description.clone()),
+            intent_hash: Some(proposal.intent_hash.clone()),
+            confidence: proposal.confidence as f64,
+        },
+    )
+    .await?;
+
+    tasks::update_task_outcome(
+        pool,
+        UpdateTaskOutcomeInput {
+            task_id: task.id.clone(),
+            status: TaskStatus::Paused,
+            token_usage: Some(i64::from(proposal.tokens_used)),
+            context_efficiency_ratio: None,
+            compliance_score: Some(70),
+            checksum_before: None,
+            checksum_after: None,
+            error_message: Some(
+                "ready_for_review: tier3 proposal generated; running mutation pipeline."
+                    .to_string(),
+            ),
+        },
+    )
+    .await?;
+
+    task_runtime::record_task_activity(
+        pool,
+        &format!("tier3_{}", persona),
+        "tier3_planned_execution_completed",
+        &task.id,
+        &format!(
+            "targetFile={} confidence={:.2} tokensUsed={}",
+            proposal.file_path, proposal.confidence, proposal.tokens_used
+        ),
+    )
+    .await?;
+
+    Ok(())
+}
+
+fn infer_tier3_persona(domain: &str, objective: &str) -> String {
+    let combined = format!("{} {}", domain, objective).to_ascii_lowercase();
+    if contains_any(&combined, &["test", "spec", "qa", "regression"]) {
+        return "test_engineer".to_string();
+    }
+    if contains_any(&combined, &["security", "auth", "permission", "token"]) {
+        return "security_analyst".to_string();
+    }
+    if contains_any(
+        &combined,
+        &[
+            "react",
+            "frontend",
+            "ui",
+            "component",
+            "layout",
+            "tsx",
+            "view",
+        ],
+    ) {
+        return "react_specialist".to_string();
+    }
+    if contains_any(&combined, &["query", "schema", "migration", "database"]) {
+        return "database_optimizer".to_string();
+    }
+    "style_enforcer".to_string()
+}
+
+fn select_tier3_target_file(
+    chunks: &[ContextChunk],
+    domain: &str,
+    objective: &str,
+) -> Option<String> {
+    if chunks.is_empty() {
+        return None;
+    }
+    let objective_lower = objective.to_ascii_lowercase();
+    let frontend_focus = domain == "frontend"
+        || contains_any(
+            &objective_lower,
+            &["frontend", "react", "ui", "component", "view", "tsx"],
+        );
+    let rust_explicit = contains_any(
+        &objective_lower,
+        &["rust", "tauri", "src-tauri", ".rs", "cargo"],
+    );
+
+    let mut ranked: Vec<(i64, String)> = chunks
+        .iter()
+        .map(|chunk| {
+            let path = chunk.file_path.clone();
+            let score = if frontend_focus && !rust_explicit {
+                frontend_path_score(path.as_str())
+            } else {
+                1
+            };
+            (score, path)
+        })
+        .collect();
+
+    ranked.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
+    ranked.first().map(|(_, path)| path.clone())
+}
+
+fn frontend_path_score(path: &str) -> i64 {
+    let lower = path.to_ascii_lowercase();
+    let mut score = 0_i64;
+    if lower.ends_with(".tsx") {
+        score += 20;
+    } else if lower.ends_with(".ts") || lower.ends_with(".jsx") || lower.ends_with(".js") {
+        score += 12;
+    }
+    if lower.contains("/src/") {
+        score += 8;
+    }
+    if lower.contains("/components/") || lower.contains("/views/") || lower.contains("/pages/") {
+        score += 10;
+    }
+    if lower.contains("src-tauri/") || lower.ends_with(".rs") {
+        score -= 28;
+    }
+    score
+}
+
+fn hydrate_tier3_code_context(
+    chunks: &[ContextChunk],
+    target_file: &str,
+    limit: usize,
+) -> Vec<CodeBlock> {
+    let mut selected = chunks
+        .iter()
+        .filter(|chunk| chunk.file_path == target_file)
+        .take(limit)
+        .map(|chunk| CodeBlock {
+            file_path: chunk.file_path.clone(),
+            start_line: chunk.start_line,
+            end_line: chunk.end_line,
+            content: chunk.content.clone(),
+            embedding: None,
+        })
+        .collect::<Vec<_>>();
+
+    if selected.is_empty() {
+        selected = chunks
+            .iter()
+            .take(limit)
+            .map(|chunk| CodeBlock {
+                file_path: chunk.file_path.clone(),
+                start_line: chunk.start_line,
+                end_line: chunk.end_line,
+                content: chunk.content.clone(),
+                embedding: None,
+            })
+            .collect::<Vec<_>>();
+    }
+
+    selected
+}
+
+async fn read_tier3_file_with_fallback(
+    bridge_client: &BridgeClient,
+    input: &ApproveOrchestrationPlanInput,
+    target_file: &str,
+) -> Option<String> {
+    if let Ok(result) = tool_caller::read_file(
+        bridge_client,
+        ReadTargetFileInput {
+            target_project: input.target_project.clone(),
+            file_path: target_file.to_string(),
+            mcp_command: input.mcp_command.clone(),
+            mcp_args: input.mcp_args.clone(),
+        },
+    )
+    .await
+    {
+        return Some(result.content);
+    }
+
+    let root = PathBuf::from(input.target_project.trim());
+    let path = to_local_path(&root, target_file);
+    fs::read_to_string(path).ok()
+}
+
+fn to_local_path(root: &Path, relative_path: &str) -> PathBuf {
+    relative_path
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .fold(root.to_path_buf(), |acc, part| acc.join(part))
+}
+
 fn validate_objective_input(input: &UserObjectiveInput) -> Result<(), String> {
     if input.objective.trim().is_empty() {
         return Err("objective is required".to_string());
@@ -262,6 +854,17 @@ fn validate_objective_input(input: &UserObjectiveInput) -> Result<(), String> {
     }
     if !(0.0..=1.0).contains(&input.max_risk_tolerance) {
         return Err("maxRiskTolerance must be between 0.0 and 1.0".to_string());
+    }
+
+    Ok(())
+}
+
+fn validate_approve_input(input: &ApproveOrchestrationPlanInput) -> Result<(), String> {
+    if input.root_task_id.trim().is_empty() {
+        return Err("rootTaskId is required".to_string());
+    }
+    if input.target_project.trim().is_empty() {
+        return Err("targetProject is required".to_string());
     }
 
     Ok(())
@@ -287,110 +890,381 @@ fn infer_primary_domain(objective: &str) -> String {
     "platform".to_string()
 }
 
-fn desired_assignment_count(objective: &str) -> usize {
-    let value = objective.to_lowercase();
-    if contains_any(&value, &["refactor", "rewrite", "migrate", "overhaul"]) {
+fn estimate_objective_complexity(
+    objective: &str,
+    domain: &str,
+    candidate_files: usize,
+    max_risk_tolerance: f32,
+) -> f32 {
+    let value = objective.to_ascii_lowercase();
+    let mut score = 0.25_f32;
+
+    if value.len() > 90 {
+        score += 0.12;
+    }
+    if value.len() > 160 {
+        score += 0.08;
+    }
+    if contains_any(
+        &value,
+        &[
+            "refactor",
+            "rewrite",
+            "migrate",
+            "overhaul",
+            "architecture",
+            "cross-cutting",
+        ],
+    ) {
+        score += 0.22;
+    }
+    if contains_any(
+        &value,
+        &[
+            "security",
+            "auth",
+            "transaction",
+            "concurrency",
+            "consistency",
+            "state machine",
+        ],
+    ) {
+        score += 0.14;
+    }
+    if contains_any(
+        &value,
+        &["frontend", "react", "ui", "component", "routing", "form"],
+    ) && domain == "frontend"
+    {
+        score += 0.08;
+    }
+
+    score += ((candidate_files as f32) / 220.0).clamp(0.0, 0.20);
+    score += (0.65 - max_risk_tolerance.clamp(0.0, 1.0)).max(0.0) * 0.18;
+
+    score.clamp(0.05, 0.95)
+}
+
+fn desired_assignment_count(objective: &str, complexity: f32) -> usize {
+    let value = objective.to_ascii_lowercase();
+    let mut count: usize = if complexity >= 0.78 {
         5
-    } else if value.len() > 80 {
+    } else if complexity >= 0.52 {
         4
     } else {
         3
+    };
+
+    if contains_any(&value, &["hotfix", "small", "quick"]) {
+        count = count.saturating_sub(1).max(3);
     }
+    if contains_any(&value, &["rewrite", "multi-module", "platform-wide"]) {
+        count = (count + 1).min(5);
+    }
+
+    count.clamp(3, 5)
 }
 
-fn build_assignment_drafts(domain: &str, count: usize) -> Vec<AssignmentDraft> {
-    let templates: Vec<(&str, &str)> =
-        match domain {
-            "auth" => {
+fn build_assignment_drafts(domain: &str, count: usize, complexity: f32) -> Vec<AssignmentDraft> {
+    let high_complexity = complexity >= 0.70;
+    let medium_complexity = complexity >= 0.45;
+
+    let templates: Vec<(u8, &str, &str)> = match domain {
+        "auth" => {
+            if high_complexity {
                 vec![
-            ("auth", "Audit current auth module boundaries and high-risk dependencies."),
-            (
-                "auth",
-                "Refactor authentication domain services and contracts for clearer ownership.",
-            ),
-            (
-                "auth",
-                "Update auth persistence/session adapters to match the new interfaces.",
-            ),
-            (
-                "frontend",
-                "Adjust auth consumers (middleware, hooks, guards) to the refactored flow.",
-            ),
-            ("testing", "Expand auth regression tests and failure-mode coverage."),
-        ]
+                    (
+                        2,
+                        "auth",
+                        "Design auth boundary plan and coordinate critical interface refactor.",
+                    ),
+                    (
+                        2,
+                        "auth",
+                        "Coordinate token/session flow changes across services and adapters.",
+                    ),
+                    (
+                        3,
+                        "frontend",
+                        "Implement targeted auth UI consumer updates for guarded routes and hooks.",
+                    ),
+                    (
+                        3,
+                        "testing",
+                        "Add high-value auth regression tests for success/failure paths.",
+                    ),
+                    (
+                        2,
+                        "platform",
+                        "Stabilize rollout gates and backward compatibility for auth migration.",
+                    ),
+                ]
+            } else if medium_complexity {
+                vec![
+                    (
+                        2,
+                        "auth",
+                        "Coordinate focused auth service and contract cleanup for current objective.",
+                    ),
+                    (
+                        3,
+                        "auth",
+                        "Implement minimal auth persistence/session adapter adjustments.",
+                    ),
+                    (
+                        3,
+                        "testing",
+                        "Add regression checks for auth edge cases in modified flows.",
+                    ),
+                    (
+                        3,
+                        "frontend",
+                        "Patch auth-facing UI handlers to preserve behavior.",
+                    ),
+                ]
+            } else {
+                vec![
+                    (
+                        3,
+                        "auth",
+                        "Implement a focused auth fix with minimal blast radius.",
+                    ),
+                    (
+                        3,
+                        "testing",
+                        "Add targeted tests covering the changed auth behavior.",
+                    ),
+                    (
+                        3,
+                        "frontend",
+                        "Apply necessary UI-level auth consumer adjustments.",
+                    ),
+                ]
             }
-            "database" => vec![
-                (
-                    "database",
-                    "Map current data model and identify schema/query refactor points.",
-                ),
-                (
-                    "database",
-                    "Refactor repository/query layer to reduce coupling and improve clarity.",
-                ),
-                (
-                    "database",
-                    "Validate indexes, constraints, and migration safety for new data paths.",
-                ),
-                (
-                    "api",
-                    "Adapt API/use-case boundaries to updated persistence contracts.",
-                ),
-                (
-                    "testing",
-                    "Add database regression and performance guardrail tests.",
-                ),
-            ],
-            "frontend" => vec![
-                (
-                    "frontend",
-                    "Assess component boundaries and rendering hotspots in scope.",
-                ),
-                (
-                    "frontend",
-                    "Refactor core components/hooks into clearer state and dependency boundaries.",
-                ),
-                (
-                    "frontend",
-                    "Update shared UI contracts and integration points used by other modules.",
-                ),
-                (
-                    "api",
-                    "Align client data-access layer with refactored frontend boundaries.",
-                ),
-                (
-                    "testing",
-                    "Expand UI smoke/regression tests for critical user flows in scope.",
-                ),
-            ],
-            _ => vec![
-                (
-                    "platform",
-                    "Analyze module boundaries, dependencies, and high-risk change surfaces.",
-                ),
-                (
-                    "platform",
-                    "Refactor core business logic into explicit contracts and stable seams.",
-                ),
-                (
-                    "platform",
-                    "Update adapters/integration layers to honor the new boundaries.",
-                ),
-                (
-                    "testing",
-                    "Increase regression and edge-case coverage for the refactored scope.",
-                ),
-                (
-                    "platform",
-                    "Review rollout risk and verification checklist for safe adoption.",
-                ),
-            ],
-        };
+        }
+        "database" => {
+            if high_complexity {
+                vec![
+                    (
+                        2,
+                        "database",
+                        "Coordinate schema/query refactor boundaries and migration sequencing.",
+                    ),
+                    (
+                        2,
+                        "database",
+                        "Lead repository and data access contract updates across modules.",
+                    ),
+                    (
+                        3,
+                        "api",
+                        "Implement API adapter updates required by new data contracts.",
+                    ),
+                    (
+                        3,
+                        "testing",
+                        "Add migration and regression checks for data integrity.",
+                    ),
+                    (
+                        2,
+                        "platform",
+                        "Prepare rollback and rollout guards for database refactor.",
+                    ),
+                ]
+            } else if medium_complexity {
+                vec![
+                    (
+                        2,
+                        "database",
+                        "Coordinate focused query/repository improvements in scoped area.",
+                    ),
+                    (
+                        3,
+                        "database",
+                        "Implement index or query path updates for targeted hotspots.",
+                    ),
+                    (
+                        3,
+                        "testing",
+                        "Add regression checks for updated query paths.",
+                    ),
+                    (
+                        3,
+                        "api",
+                        "Patch API surface impacted by persistence contract changes.",
+                    ),
+                ]
+            } else {
+                vec![
+                    (
+                        3,
+                        "database",
+                        "Implement a targeted low-risk persistence or query fix.",
+                    ),
+                    (
+                        3,
+                        "testing",
+                        "Add focused tests for the modified data behavior.",
+                    ),
+                    (
+                        3,
+                        "api",
+                        "Apply required adapter-level updates for consistency.",
+                    ),
+                ]
+            }
+        }
+        "frontend" => {
+            if high_complexity {
+                vec![
+                    (
+                        2,
+                        "frontend",
+                        "Coordinate component boundary refactor and shared state contract updates.",
+                    ),
+                    (
+                        2,
+                        "frontend",
+                        "Lead integration plan for UI modules impacted by this objective.",
+                    ),
+                    (
+                        3,
+                        "frontend",
+                        "Implement focused component-level improvements in highest-impact paths.",
+                    ),
+                    (
+                        3,
+                        "testing",
+                        "Add UI flow regressions covering loading/error/interaction states.",
+                    ),
+                    (
+                        3,
+                        "api",
+                        "Patch data-access adapters used by updated frontend surfaces.",
+                    ),
+                ]
+            } else if medium_complexity {
+                vec![
+                    (
+                        2,
+                        "frontend",
+                        "Coordinate medium-scope frontend update and align shared contracts.",
+                    ),
+                    (
+                        3,
+                        "frontend",
+                        "Implement core component/hook improvements for the target flow.",
+                    ),
+                    (
+                        3,
+                        "testing",
+                        "Add targeted UI tests for changed behavior and edge states.",
+                    ),
+                    (
+                        3,
+                        "frontend",
+                        "Polish integration points and eliminate regressions in dependent views.",
+                    ),
+                ]
+            } else {
+                vec![
+                    (
+                        3,
+                        "frontend",
+                        "Implement focused React/UI changes for the selected feature path.",
+                    ),
+                    (
+                        3,
+                        "frontend",
+                        "Apply a second focused fix for state/render consistency.",
+                    ),
+                    (
+                        3,
+                        "testing",
+                        "Add compact regression checks for the updated UI behavior.",
+                    ),
+                ]
+            }
+        }
+        _ => {
+            if high_complexity {
+                vec![
+                    (
+                        2,
+                        "platform",
+                        "Coordinate high-risk cross-module refactor boundaries and sequencing.",
+                    ),
+                    (
+                        2,
+                        "platform",
+                        "Lead integration updates across service and adapter seams.",
+                    ),
+                    (
+                        3,
+                        "platform",
+                        "Implement scoped core logic improvements for highest-priority module.",
+                    ),
+                    (
+                        3,
+                        "testing",
+                        "Add regression tests for critical success and failure scenarios.",
+                    ),
+                    (
+                        3,
+                        "platform",
+                        "Apply rollout hardening and safety checks around changed paths.",
+                    ),
+                ]
+            } else if medium_complexity {
+                vec![
+                    (
+                        2,
+                        "platform",
+                        "Coordinate focused domain logic cleanup and boundary improvements.",
+                    ),
+                    (
+                        3,
+                        "platform",
+                        "Implement adapter and contract updates required by the refactor.",
+                    ),
+                    (
+                        3,
+                        "testing",
+                        "Add targeted tests covering main and edge execution paths.",
+                    ),
+                    (
+                        3,
+                        "platform",
+                        "Patch follow-up consistency issues discovered during review.",
+                    ),
+                ]
+            } else {
+                vec![
+                    (
+                        3,
+                        "platform",
+                        "Implement a focused low-risk change in the target module.",
+                    ),
+                    (
+                        3,
+                        "platform",
+                        "Apply a companion fix to keep adjacent contracts stable.",
+                    ),
+                    (
+                        3,
+                        "testing",
+                        "Add compact regression tests for modified behavior.",
+                    ),
+                ]
+            }
+        }
+    };
 
     templates
         .into_iter()
         .take(count.clamp(3, 5))
-        .map(|(draft_domain, objective)| AssignmentDraft {
+        .map(|(tier, draft_domain, objective)| AssignmentDraft {
+            tier,
             domain: draft_domain.to_string(),
             objective: objective.to_string(),
         })

@@ -70,6 +70,7 @@ pub fn run() {
             commands::list_task_budget_requests,
             commands::resolve_task_budget_request,
             commands::orchestrate_objective,
+            commands::approve_orchestration_plan,
             commands::execute_domain_task,
             commands::list_task_mutations,
             commands::run_mutation_pipeline,

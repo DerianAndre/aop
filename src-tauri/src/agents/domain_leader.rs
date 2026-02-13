@@ -106,6 +106,7 @@ pub async fn execute_domain_task(
     let candidate_files = collect_candidate_files(
         bridge_client,
         &input.target_project,
+        &task.domain,
         &task.objective,
         &chunks,
         &input,
@@ -368,12 +369,24 @@ pub async fn execute_domain_task(
         conflict.as_ref(),
     );
 
-    let final_task_status = if status == "ready_for_review" {
-        TaskStatus::Completed
+    let (final_task_status, final_error_message) = if status == "ready_for_review" {
+        (
+            TaskStatus::Paused,
+            Some(
+                "ready_for_review: proposals generated; run mutation pipeline to apply code."
+                    .to_string(),
+            ),
+        )
     } else if status == "blocked" {
-        TaskStatus::Failed
+        (
+            TaskStatus::Failed,
+            Some("blocked: no valid specialist proposals were produced.".to_string()),
+        )
     } else {
-        TaskStatus::Paused
+        (
+            TaskStatus::Paused,
+            Some("consensus_failed: human review required before apply.".to_string()),
+        )
     };
 
     tasks::update_task_outcome(
@@ -386,14 +399,14 @@ pub async fn execute_domain_task(
             compliance_score: Some(compliance_score),
             checksum_before: None,
             checksum_after: None,
-            error_message: None,
+            error_message: final_error_message,
         },
     )
     .await?;
     task_runtime::record_task_activity(
         pool,
         "tier2_domain_leader",
-        "tier2_execution_completed",
+        "tier2_review_gate",
         &task.id,
         &format!(
             "status={} proposals={} complianceScore={} tokensSpent={}",
@@ -431,6 +444,7 @@ fn validate_input(input: &ExecuteDomainTaskInput) -> Result<(), String> {
 async fn collect_candidate_files(
     bridge_client: &BridgeClient,
     target_project: &str,
+    domain: &str,
     objective: &str,
     chunks: &[ContextChunk],
     input: &ExecuteDomainTaskInput,
@@ -445,7 +459,10 @@ async fn collect_candidate_files(
     }
 
     if ordered.len() >= 3 {
-        return ordered.into_iter().take(6).collect();
+        return prioritize_candidate_files(ordered, domain, objective)
+            .into_iter()
+            .take(6)
+            .collect();
     }
 
     let fallback_pattern = objective
@@ -472,7 +489,88 @@ async fn collect_candidate_files(
         }
     }
 
-    ordered.into_iter().take(6).collect()
+    prioritize_candidate_files(ordered, domain, objective)
+        .into_iter()
+        .take(6)
+        .collect()
+}
+
+fn prioritize_candidate_files(
+    mut files: Vec<String>,
+    domain: &str,
+    objective: &str,
+) -> Vec<String> {
+    if files.len() <= 1 {
+        return files;
+    }
+
+    let objective_lower = objective.to_ascii_lowercase();
+    let domain_lower = domain.to_ascii_lowercase();
+    let is_frontend_focus = domain_lower == "frontend"
+        || objective_contains_any(
+            &objective_lower,
+            &[
+                "frontend",
+                "react",
+                "ui",
+                "component",
+                "view",
+                "page",
+                "tsx",
+                "tailwind",
+            ],
+        );
+    let explicit_tauri_or_rust = objective_contains_any(
+        &objective_lower,
+        &["tauri", "rust", "cargo", "src-tauri", ".rs"],
+    );
+
+    if !is_frontend_focus || explicit_tauri_or_rust {
+        return files;
+    }
+
+    files.sort_by(|left, right| {
+        score_frontend_path(right)
+            .cmp(&score_frontend_path(left))
+            .then_with(|| left.cmp(right))
+    });
+    files
+}
+
+fn objective_contains_any(value: &str, parts: &[&str]) -> bool {
+    parts.iter().any(|part| value.contains(part))
+}
+
+fn score_frontend_path(path: &str) -> i64 {
+    let lower = path.to_ascii_lowercase();
+    let mut score = 0_i64;
+
+    if lower.ends_with(".tsx") {
+        score += 28;
+    } else if lower.ends_with(".ts") || lower.ends_with(".jsx") || lower.ends_with(".js") {
+        score += 18;
+    } else if lower.ends_with(".css") {
+        score += 12;
+    }
+
+    if lower.contains("/src/") {
+        score += 12;
+    }
+    if lower.contains("/components/") || lower.contains("/views/") || lower.contains("/pages/") {
+        score += 14;
+    }
+    if lower.contains("/hooks/") || lower.contains("/layouts/") || lower.contains("/store/") {
+        score += 8;
+    }
+
+    if lower.contains("src-tauri/") {
+        score -= 35;
+    }
+    if lower.ends_with(".rs") || lower.contains("cargo.toml") {
+        score -= 45;
+    }
+
+    score
 }
 
 fn personas_for_domain(domain: &str) -> Vec<String> {

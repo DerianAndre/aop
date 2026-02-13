@@ -38,7 +38,7 @@ export interface UserObjectiveInput {
 export interface TaskAssignment {
   taskId: string
   parentId: string
-  tier: 2
+  tier: 2 | 3
   domain: string
   objective: string
   tokenBudget: number
@@ -53,6 +53,24 @@ export interface OrchestrationResult {
   overheadBudget: number
   reserveBudget: number
   distributedBudget: number
+}
+
+export interface ApproveOrchestrationPlanInput {
+  rootTaskId: string
+  targetProject: string
+  topK?: number
+  mcpCommand?: string
+  mcpArgs?: string[]
+}
+
+export interface PlanExecutionResult {
+  rootTask: TaskRecord
+  executedTaskIds: string[]
+  tier2Executions: number
+  tier3Executions: number
+  appliedMutations: number
+  failedExecutions: number
+  message: string
 }
 
 export interface ExecuteDomainTaskInput {

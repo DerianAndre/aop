@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 
 import type {
   AgentTerminalSession,
+  ApproveOrchestrationPlanInput,
   AuditLogEntry,
   BudgetRequestRecord,
   CreateTaskInput,
@@ -24,6 +25,7 @@ import type {
   ModelRegistrySnapshot,
   MutationRevisionResult,
   OrchestrationResult,
+  PlanExecutionResult,
   QueryCodebaseInput,
   ReadTargetFileInput,
   RequestTaskBudgetIncreaseInput,
@@ -70,6 +72,10 @@ export async function resolveTaskBudgetRequest(input: ResolveTaskBudgetRequestIn
 
 export async function orchestrateObjective(input: UserObjectiveInput): Promise<OrchestrationResult> {
   return invoke<OrchestrationResult>('orchestrate_objective', { input })
+}
+
+export async function approveOrchestrationPlan(input: ApproveOrchestrationPlanInput): Promise<PlanExecutionResult> {
+  return invoke<PlanExecutionResult>('approve_orchestration_plan', { input })
 }
 
 export async function executeDomainTask(input: ExecuteDomainTaskInput): Promise<IntentSummary> {

@@ -10,13 +10,14 @@ import { Textarea } from '@/components/ui/textarea'
 import TokenBurnChart from '@/components/TokenBurnChart'
 import { useTargetProjectConfig } from '@/hooks/useTargetProjectConfig'
 import {
+  approveOrchestrationPlan,
   controlTask,
   getTasks,
   orchestrateObjective,
 } from '@/hooks/useTauri'
 import { executeRestartApply, formatRestartApplyIssue } from '@/lib/restartApply'
 import { useAopStore } from '@/store/aop-store'
-import type { OrchestrationResult, TaskControlAction, TaskRecord } from '@/types'
+import type { OrchestrationResult, PlanExecutionResult, TaskControlAction, TaskRecord } from '@/types'
 
 function formatNumber(value: number): string {
   return new Intl.NumberFormat().format(value)
@@ -122,6 +123,8 @@ export function DashboardView() {
   const [orchestrationControlError, setOrchestrationControlError] = useState<string | null>(null)
   const [activeControlAction, setActiveControlAction] = useState<TaskControlAction | null>(null)
   const [orchestrationResult, setOrchestrationResult] = useState<OrchestrationResult | null>(null)
+  const [isApprovingPlan, setIsApprovingPlan] = useState(false)
+  const [planExecutionResult, setPlanExecutionResult] = useState<PlanExecutionResult | null>(null)
 
   const loadTasks = useCallback(async () => {
     setIsLoadingTasks(true)
@@ -186,6 +189,7 @@ export function DashboardView() {
       })
       setObjective('')
       setOrchestrationResult(result)
+      setPlanExecutionResult(null)
       await loadTasks()
     } catch (error) {
       setOrchestrationError(error instanceof Error ? error.message : String(error))
@@ -243,6 +247,39 @@ export function DashboardView() {
     }
   }
 
+  async function handleApprovePlan() {
+    const rootTaskId = orchestrationResult?.rootTask.id ?? monitoredTaskId
+    if (!rootTaskId) {
+      return
+    }
+
+    const target = targetProject.trim()
+    if (!target) {
+      setOrchestrationControlError('Target project path is required before approving the orchestration plan.')
+      return
+    }
+
+    setOrchestrationControlError(null)
+    setIsApprovingPlan(true)
+    try {
+      const result = await approveOrchestrationPlan({
+        rootTaskId,
+        targetProject: target,
+        topK: 8,
+        ...mcpConfig,
+      })
+      setPlanExecutionResult(result)
+      if (result.failedExecutions > 0 || result.appliedMutations === 0) {
+        setOrchestrationControlError(result.message)
+      }
+      await loadTasks()
+    } catch (error) {
+      setOrchestrationControlError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setIsApprovingPlan(false)
+    }
+  }
+
   const activeTasks = useMemo(
     () => tasks.filter((task) => task.status !== 'completed' && task.status !== 'failed').length,
     [tasks],
@@ -270,6 +307,7 @@ export function DashboardView() {
     () => tasks.find((task) => task.id === monitoredTaskId) ?? null,
     [monitoredTaskId, tasks],
   )
+  const canApprovePlan = monitoredTask?.tier === 1 && monitoredTask.status === 'paused'
 
   return (
     <div className="space-y-6">
@@ -391,7 +429,9 @@ export function DashboardView() {
                 {orchestrationResult.assignments.map((assignment) => (
                   <div className="rounded-md border p-3" key={assignment.taskId}>
                     <div className="flex items-center justify-between gap-3">
-                      <strong>{assignment.domain}</strong>
+                      <strong>
+                        Tier {assignment.tier} · {assignment.domain}
+                      </strong>
                       <span className="text-muted-foreground text-xs">
                         risk {assignment.riskFactor.toFixed(2)} ({mapRiskLabel(assignment.riskFactor)})
                       </span>
@@ -405,6 +445,14 @@ export function DashboardView() {
               </div>
 
               <div className="flex flex-wrap gap-2">
+                <Button
+                  disabled={isApprovingPlan || !canApprovePlan}
+                  onClick={() => void handleApprovePlan()}
+                  size="sm"
+                  type="button"
+                >
+                  {isApprovingPlan ? 'Approving Plan...' : 'Approve Plan & Spawn Smart Agents'}
+                </Button>
                 <Button
                   disabled={activeControlAction !== null || !canPauseMonitoredTask}
                   onClick={() => void handleOrchestrationControl('pause')}
@@ -443,6 +491,12 @@ export function DashboardView() {
                 </Button>
               </div>
 
+              {planExecutionResult ? (
+                <p className="text-muted-foreground text-sm whitespace-pre-wrap">
+                  {planExecutionResult.message}
+                </p>
+              ) : null}
+
               {orchestrationControlError ? (
                 <p className="text-destructive text-sm whitespace-pre-wrap">{orchestrationControlError}</p>
               ) : null}
@@ -465,6 +519,14 @@ export function DashboardView() {
           {!orchestrationResult && monitoredTaskId ? (
             <div className="space-y-2">
               <div className="flex flex-wrap gap-2">
+                <Button
+                  disabled={isApprovingPlan || !canApprovePlan}
+                  onClick={() => void handleApprovePlan()}
+                  size="sm"
+                  type="button"
+                >
+                  {isApprovingPlan ? 'Approving Plan...' : 'Approve Plan & Spawn Smart Agents'}
+                </Button>
                 <Button
                   disabled={activeControlAction !== null || !canPauseMonitoredTask}
                   onClick={() => void handleOrchestrationControl('pause')}

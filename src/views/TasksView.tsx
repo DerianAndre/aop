@@ -31,6 +31,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { useTargetProjectConfig } from "@/hooks/useTargetProjectConfig";
 import {
+  approveOrchestrationPlan,
   controlTask,
   createTask,
   getTasks,
@@ -74,6 +75,13 @@ export function TasksView() {
 
   const selectedTask: TaskRecord | null =
     tasks.find((task) => task.id === selectedTaskId) ?? null;
+  const taskById = useMemo(() => {
+    const result = new Map<string, TaskRecord>();
+    tasks.forEach((task) => {
+      result.set(task.id, task);
+    });
+    return result;
+  }, [tasks]);
   const parentByTaskId = useMemo(() => {
     const result = new Map<string, string | null>();
     tasks.forEach((task) => {
@@ -81,6 +89,95 @@ export function TasksView() {
     });
     return result;
   }, [tasks]);
+  const childTaskIdsByParent = useMemo(() => {
+    const result = new Map<string, string[]>();
+    tasks.forEach((task) => {
+      if (!task.parentId) {
+        return;
+      }
+      const current = result.get(task.parentId) ?? [];
+      current.push(task.id);
+      result.set(task.parentId, current);
+    });
+    return result;
+  }, [tasks]);
+  const rootTier1Tasks = useMemo<TaskRecord[]>(
+    () =>
+      tasks
+        .filter((task) => task.tier === 1 && task.parentId === null)
+        .sort((left, right) => right.createdAt - left.createdAt),
+    [tasks],
+  );
+  const [visibleRootTaskId, setVisibleRootTaskId] = useState<string | null>(null);
+
+  const selectedRootTaskId = useMemo(() => {
+    if (!selectedTaskId) {
+      return null;
+    }
+    let current = taskById.get(selectedTaskId) ?? null;
+    while (current?.parentId) {
+      current = taskById.get(current.parentId) ?? null;
+    }
+    return current?.id ?? null;
+  }, [selectedTaskId, taskById]);
+
+  useEffect(() => {
+    if (rootTier1Tasks.length === 0) {
+      if (visibleRootTaskId !== null) {
+        setVisibleRootTaskId(null);
+      }
+      return;
+    }
+
+    const rootExists =
+      visibleRootTaskId !== null &&
+      rootTier1Tasks.some((task) => task.id === visibleRootTaskId);
+    if (rootExists) {
+      return;
+    }
+
+    const preferredRoot =
+      selectedRootTaskId &&
+      rootTier1Tasks.some((task) => task.id === selectedRootTaskId)
+        ? selectedRootTaskId
+        : rootTier1Tasks[0]?.id ?? null;
+    setVisibleRootTaskId(preferredRoot);
+  }, [rootTier1Tasks, selectedRootTaskId, visibleRootTaskId]);
+
+  const visibleTaskIds = useMemo(() => {
+    if (!visibleRootTaskId) {
+      return new Set<string>();
+    }
+
+    const ids = new Set<string>();
+    const queue: string[] = [visibleRootTaskId];
+    while (queue.length > 0) {
+      const currentId = queue.shift();
+      if (!currentId || ids.has(currentId)) {
+        continue;
+      }
+      ids.add(currentId);
+      const children = childTaskIdsByParent.get(currentId) ?? [];
+      children.forEach((childId) => queue.push(childId));
+    }
+
+    return ids;
+  }, [childTaskIdsByParent, visibleRootTaskId]);
+
+  const graphTasks = useMemo(
+    () => tasks.filter((task) => visibleTaskIds.has(task.id)),
+    [tasks, visibleTaskIds],
+  );
+
+  useEffect(() => {
+    if (!visibleRootTaskId) {
+      return;
+    }
+    if (!selectedTaskId || !visibleTaskIds.has(selectedTaskId)) {
+      selectTask(visibleRootTaskId);
+    }
+  }, [selectTask, selectedTaskId, visibleRootTaskId, visibleTaskIds]);
+
   const resumableTaskIds = useMemo(() => {
     const result = new Set<string>();
     tasks.forEach((task) => {
@@ -170,6 +267,7 @@ export function TasksView() {
   const [taskControlError, setTaskControlError] = useState<string | null>(null);
   const [activeTaskControl, setActiveTaskControl] =
     useState<TaskControlAction | null>(null);
+  const [isApprovingPlan, setIsApprovingPlan] = useState(false);
   const [taskForm, setTaskForm] = useState<CreateTaskInput>(DEFAULT_TASK_FORM);
 
   const goToTab = useCallback(
@@ -301,6 +399,40 @@ export function TasksView() {
     }
   }
 
+  async function handleApprovePlanForSelectedTask() {
+    if (!selectedTask || selectedTask.tier !== 1) {
+      return;
+    }
+    const target = targetProject.trim();
+    if (!target) {
+      setTaskControlError(
+        "Target project path is required before approving the orchestration plan.",
+      );
+      return;
+    }
+
+    setTaskControlError(null);
+    setIsApprovingPlan(true);
+    try {
+      const result = await approveOrchestrationPlan({
+        rootTaskId: selectedTask.id,
+        targetProject: target,
+        topK: 8,
+        ...mcpConfig,
+      });
+      if (result.failedExecutions > 0 || result.appliedMutations === 0) {
+        setTaskControlError(result.message);
+      }
+      await loadTasks();
+    } catch (error) {
+      setTaskControlError(
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      setIsApprovingPlan(false);
+    }
+  }
+
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-2!">
       <Card>
@@ -346,6 +478,21 @@ export function TasksView() {
               </p>
 
               <div className="flex flex-wrap gap-2">
+                <Button
+                  disabled={
+                    isApprovingPlan ||
+                    !selectedTask ||
+                    selectedTask.tier !== 1 ||
+                    selectedTask.status !== "paused"
+                  }
+                  onClick={() => void handleApprovePlanForSelectedTask()}
+                  size="sm"
+                  type="button"
+                >
+                  {isApprovingPlan
+                    ? "Approving Plan..."
+                    : "Approve Plan & Spawn Smart Agents"}
+                </Button>
                 <Button
                   disabled={activeTaskControl !== null || !canPauseSelectedTask}
                   onClick={() => void handleTaskControl("pause")}
@@ -462,8 +609,28 @@ export function TasksView() {
           {taskLoadError ? (
             <p className="text-destructive mb-3 text-sm">{taskLoadError}</p>
           ) : null}
+          <div className="mb-3 grid grid-cols-1 gap-2">
+            <Label htmlFor="root-task-scope">Visible Orchestration (Tier 1)</Label>
+            <Select
+              onValueChange={(value) => {
+                setVisibleRootTaskId(value);
+              }}
+              value={visibleRootTaskId ?? ""}
+            >
+              <SelectTrigger id="root-task-scope">
+                <SelectValue placeholder="Select a Tier 1 orchestration root" />
+              </SelectTrigger>
+              <SelectContent>
+                {rootTier1Tasks.map((task) => (
+                  <SelectItem key={task.id} value={task.id}>
+                    {task.domain} · {task.status} · {task.objective.slice(0, 42)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
           <TaskGraph
-            tasks={tasks}
+            tasks={graphTasks}
             selectedTaskId={selectedTaskId}
             onTaskClick={(taskId) => {
               selectTask(taskId);
