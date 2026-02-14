@@ -745,7 +745,12 @@ async fn run_command_owned(
 }
 
 fn normalize_patch_line_endings(patch: &str) -> String {
-    patch.replace("\r\n", "\n")
+    let normalized = patch.replace("\r\n", "\n");
+    if normalized.ends_with('\n') {
+        normalized
+    } else {
+        format!("{normalized}\n")
+    }
 }
 
 fn validate_patch_format(patch: &str) -> Result<(), String> {

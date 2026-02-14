@@ -503,12 +503,18 @@ fn parse_specialist_model_output(raw: &str) -> Option<SpecialistModelOutput> {
 
 /// Compute a proper unified diff using the `similar` crate.
 /// This guarantees valid patch format with correct hunk headers.
+/// The output always ends with `\n` so `git apply` can parse it.
 pub fn compute_unified_diff(file_path: &str, original: &str, modified: &str) -> String {
     let diff = TextDiff::from_lines(original, modified);
-    diff.unified_diff()
+    let mut output = diff
+        .unified_diff()
         .context_radius(3)
         .header(&format!("a/{file_path}"), &format!("b/{file_path}"))
-        .to_string()
+        .to_string();
+    if !output.is_empty() && !output.ends_with('\n') {
+        output.push('\n');
+    }
+    output
 }
 
 fn strip_code_fences(input: &str) -> String {

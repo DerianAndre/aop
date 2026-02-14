@@ -96,7 +96,7 @@ pub async fn create_mutation(
     .bind(input.task_id.trim())
     .bind(input.agent_uid.trim())
     .bind(input.file_path.trim())
-    .bind(input.diff_content.trim())
+    .bind(&input.diff_content)
     .bind(
         input
             .intent_description
