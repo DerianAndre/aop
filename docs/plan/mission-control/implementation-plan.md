@@ -30,6 +30,7 @@ Implement Mission Control as the primary operational surface for AOP with:
 - Mission Control UI (ops-clean) with density modes and focused root selector.
 - Model selection scoring with health-aware fallback.
 - MCP trace sanitization and retention jobs.
+- Shared formatting utilities for token count display (`src/lib/format.ts`).
 
 ### Out of Scope
 
@@ -111,6 +112,10 @@ Implement Mission Control as the primary operational surface for AOP with:
 - `ProviderSecretStatus`
 - `ModelHealthRecord`
 
+### 5.3 Frontend Utilities
+
+- `formatTokenCount(count: number): string` — Formats raw token counts with K/M suffixes for human-readable display (e.g., `1500` → `"1.5K"`, `2000000` → `"2.0M"`, values below 1000 returned as-is). Located in `src/lib/format.ts`.
+
 ---
 
 ## 6. UI Surface
@@ -124,6 +129,7 @@ Implement Mission Control as the primary operational surface for AOP with:
   - Balanced
   - Minimal
 - Mosaic list of agent cards with provider/model/persona/skill/MCP/tokens/status.
+- Token counts displayed using `formatTokenCount` for compact human-readable values.
 - Detail panel:
   - live event timeline
   - terminal output stream
@@ -178,6 +184,7 @@ Auto + request mode:
 - Density mode switch behavior.
 - Root-scope selection behavior.
 - Live timeline refresh behavior.
+- `formatTokenCount` unit tests: sub-1000 passthrough, K suffix (1000–999999), M suffix (1000000+), edge cases (0, negative, boundary values).
 
 ---
 
@@ -222,6 +229,7 @@ Auto + request mode:
 5. Secrets are persisted securely and guarded by Developer Mode + session confirmation.
 6. MCP traces are visible but sanitized.
 7. Telemetry older than 7 days is archived and pruned.
+8. Token counts across Mission Control UI render with compact K/M suffixes via `formatTokenCount`.
 
 ---
 
@@ -248,8 +256,8 @@ Auto + request mode:
 | Stronghold secrets | `src-tauri/src/secret_vault.rs`, `src-tauri/src/lib.rs` | secret command tests |
 | Intelligent model selection | `src-tauri/src/model_intelligence.rs`, `src-tauri/src/model_registry.rs`, `src-tauri/src/llm_adapter.rs` | routing tests |
 | Mission Control UI | `src/views/MissionControlView.tsx`, `src/layouts/AppLayout.tsx`, `src/components/aop-sidebar.tsx` | UI tests |
+| Token display formatting | `src/lib/format.ts` | `formatTokenCount` unit tests |
 | Scope controls | `src-tauri/src/commands.rs`, `src-tauri/src/db/tasks.rs` | control scope tests |
 | Smart budget thresholds | `src-tauri/src/task_runtime.rs` | budget policy tests |
 | MCP sanitized traces | `src-tauri/src/mcp_bridge/client.rs`, `src-tauri/src/db/telemetry.rs` | sanitization tests |
 | 7-day archive retention | `src-tauri/src/db/telemetry.rs`, `src-tauri/src/lib.rs` | archive/prune tests |
-
