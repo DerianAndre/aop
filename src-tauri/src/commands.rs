@@ -2,8 +2,8 @@ use tauri::State;
 
 use crate::agents::domain_leader::{self, ExecuteDomainTaskInput, IntentSummary};
 use crate::agents::orchestrator::{
-    self, ApproveOrchestrationPlanInput, OrchestrationResult, PlanExecutionResult,
-    UserObjectiveInput,
+    self, AnalyzeObjectiveInput, ApproveOrchestrationPlanInput, GeneratePlanInput, GeneratedPlan,
+    ObjectiveAnalysis, OrchestrationResult, PlanExecutionResult, UserObjectiveInput,
 };
 use crate::db::budget_requests::{
     self, BudgetRequestRecord, CreateBudgetRequestInput, ListTaskBudgetRequestsInput,
@@ -179,6 +179,22 @@ pub async fn orchestrate_objective(
     input: UserObjectiveInput,
 ) -> Result<OrchestrationResult, String> {
     orchestrator::orchestrate_and_persist(&state.db_pool, &state.model_registry, input).await
+}
+
+#[tauri::command]
+pub async fn analyze_objective(
+    state: State<'_, AppState>,
+    input: AnalyzeObjectiveInput,
+) -> Result<ObjectiveAnalysis, String> {
+    orchestrator::analyze_objective(&state.db_pool, &state.model_registry, input).await
+}
+
+#[tauri::command]
+pub async fn submit_answers_and_plan(
+    state: State<'_, AppState>,
+    input: GeneratePlanInput,
+) -> Result<GeneratedPlan, String> {
+    orchestrator::generate_plan(&state.db_pool, &state.model_registry, input).await
 }
 
 #[tauri::command]

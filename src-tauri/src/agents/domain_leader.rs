@@ -646,7 +646,7 @@ fn distribute_budget_for_specialists(tier2_budget: i64, specialists: usize) -> V
         return Vec::new();
     }
 
-    let available = ((tier2_budget.max(1) as f32) * 0.8).floor() as u32;
+    let available = ((tier2_budget.max(1) as f32) * 0.90).floor() as u32;
     let base = (available / specialists as u32).max(1);
     let mut budgets = vec![base; specialists];
     let mut assigned = budgets.iter().sum::<u32>();

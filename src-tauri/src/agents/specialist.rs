@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use similar::{ChangeTag, TextDiff};
 use uuid::Uuid;
 
 use crate::agents::CodeBlock;
@@ -45,7 +46,16 @@ struct SpecialistModelOutput {
     #[serde(default)]
     intent_description: Option<String>,
     #[serde(default)]
-    note_line: Option<String>,
+    modified_content: Option<String>,
+    #[serde(default)]
+    changes_summary: Option<Vec<String>>,
+}
+
+struct RemoteGenerationResult {
+    intent_description: String,
+    diff_content: String,
+    confidence: f32,
+    output_tokens: Option<u32>,
 }
 
 pub fn run_specialist_task(
@@ -57,45 +67,50 @@ pub fn run_specialist_task(
     let agent_uid = Uuid::new_v4().to_string();
     let proposal_id = Uuid::new_v4().to_string();
     let file_path = resolve_target_file(task);
-    let model_tag = model_tag(task);
-    let fallback_intent_description = format!(
-        "{}{} proposal for {}: {}",
-        task.persona,
-        model_tag,
-        file_path,
-        task.objective.trim()
-    );
-    let fallback_note_line = build_note_line(
-        &task.persona,
-        task.model_id.as_deref(),
-        &task.objective,
-        &file_path,
-    );
 
-    let model_generation = try_remote_model_generation(
-        task,
-        &file_path,
-        target_file_content,
-        &fallback_intent_description,
-        &fallback_note_line,
-    )?;
-    let (intent_description, note_line, remote_output_tokens) = match model_generation {
-        Some((intent, note, output_tokens)) => (intent, note, output_tokens),
-        None => (fallback_intent_description, fallback_note_line, None),
+    let remote_result = try_remote_model_generation(task, &file_path, target_file_content)?;
+
+    let (intent_description, diff_content, confidence, tokens_used) = match remote_result {
+        Some(result) => {
+            let baseline_tokens = estimate_tokens_used(task, target_file_content);
+            let tokens = result
+                .output_tokens
+                .map(|ot| {
+                    baseline_tokens
+                        .saturating_add(ot)
+                        .min(task.token_budget)
+                        .max(40)
+                })
+                .unwrap_or(baseline_tokens);
+            (
+                result.intent_description,
+                result.diff_content,
+                result.confidence,
+                tokens,
+            )
+        }
+        None => {
+            let model_tag = model_tag(task);
+            let intent = format!(
+                "{}{} proposal for {}: {}",
+                task.persona,
+                model_tag,
+                file_path,
+                task.objective.trim()
+            );
+            let diff = build_fallback_diff(
+                &file_path,
+                target_file_content,
+                &task.persona,
+                &task.objective,
+            );
+            let confidence = estimate_fallback_confidence(task, target_file_content);
+            let tokens = estimate_tokens_used(task, target_file_content);
+            (intent, diff, confidence, tokens)
+        }
     };
 
     let intent_hash = hash_intent_embedding(&intent_description);
-    let confidence = estimate_confidence(task, target_file_content);
-    let baseline_tokens = estimate_tokens_used(task, target_file_content);
-    let tokens_used = remote_output_tokens
-        .map(|output_tokens| {
-            baseline_tokens
-                .saturating_add(output_tokens)
-                .min(task.token_budget)
-                .max(40)
-        })
-        .unwrap_or(baseline_tokens);
-    let diff_content = build_unified_diff(&file_path, &note_line, target_file_content);
 
     Ok(DiffProposal {
         proposal_id,
@@ -186,23 +201,50 @@ fn hash_intent_embedding(intent_description: &str) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-fn estimate_confidence(task: &SpecialistTask, target_file_content: Option<&str>) -> f32 {
-    let mut confidence = 0.58_f32;
-
+fn estimate_fallback_confidence(task: &SpecialistTask, target_file_content: Option<&str>) -> f32 {
+    let mut confidence = 0.42_f32;
     if !task.code_context.is_empty() {
-        confidence += 0.14;
+        confidence += 0.08;
     }
     if !task.constraints.is_empty() {
-        confidence += 0.09;
+        confidence += 0.05;
     }
     if target_file_content.is_some() {
-        confidence += 0.11;
+        confidence += 0.06;
     }
-    if task.persona.contains("test") {
-        confidence += 0.04;
+    confidence.clamp(0.30, 0.65)
+}
+
+fn estimate_llm_confidence(task: &SpecialistTask, original: &str, modified: &str) -> f32 {
+    let mut confidence = 0.62_f32;
+
+    if !task.code_context.is_empty() {
+        confidence += 0.08;
+    }
+    if !task.constraints.is_empty() {
+        confidence += 0.05;
     }
 
-    confidence.clamp(0.50, 0.95)
+    let original_lines = original.lines().count() as f32;
+    if original_lines > 0.0 {
+        let diff = TextDiff::from_lines(original, modified);
+        let changed_lines = diff
+            .iter_all_changes()
+            .filter(|change| {
+                matches!(change.tag(), ChangeTag::Delete | ChangeTag::Insert)
+            })
+            .count() as f32;
+        let change_ratio = changed_lines / original_lines;
+        if change_ratio < 0.15 {
+            confidence += 0.12;
+        } else if change_ratio < 0.35 {
+            confidence += 0.06;
+        } else if change_ratio > 0.80 {
+            confidence -= 0.10;
+        }
+    }
+
+    confidence.clamp(0.40, 0.95)
 }
 
 fn estimate_tokens_used(task: &SpecialistTask, target_file_content: Option<&str>) -> u32 {
@@ -225,9 +267,7 @@ fn try_remote_model_generation(
     task: &SpecialistTask,
     file_path: &str,
     target_file_content: Option<&str>,
-    fallback_intent_description: &str,
-    fallback_note_line: &str,
-) -> Result<Option<(String, String, Option<u32>)>, String> {
+) -> Result<Option<RemoteGenerationResult>, String> {
     if !remote_model_adapter_enabled() {
         return Ok(None);
     }
@@ -247,23 +287,66 @@ fn try_remote_model_generation(
 
     match llm_adapter::generate(&request) {
         Ok(response) => {
-            let parsed_output = parse_specialist_model_output(&response.text);
-            let intent_description = parsed_output
+            let parsed = parse_specialist_model_output(&response.text);
+
+            let intent_description = parsed
                 .as_ref()
                 .and_then(|payload| payload.intent_description.clone())
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty())
-                .unwrap_or_else(|| fallback_intent_description.to_string());
+                .unwrap_or_else(|| {
+                    format!(
+                        "{} proposal for {}: {}",
+                        task.persona,
+                        file_path,
+                        task.objective.trim()
+                    )
+                });
 
-            let model_note_candidate = parsed_output
+            let modified_content = parsed
                 .as_ref()
-                .and_then(|payload| payload.note_line.clone())
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty())
-                .unwrap_or_else(|| response.text.clone());
+                .and_then(|payload| payload.modified_content.clone())
+                .map(|value| strip_code_fences(&value))
+                .filter(|value| !value.trim().is_empty());
 
-            let note_line = sanitize_llm_note_line(&model_note_candidate, file_path)
-                .unwrap_or_else(|| fallback_note_line.to_string());
+            let (diff_content, confidence) = match (target_file_content, modified_content) {
+                (Some(original), Some(ref modified)) if original.trim() != modified.trim() => {
+                    let original_normalized = original.replace("\r\n", "\n");
+                    let modified_normalized = modified.replace("\r\n", "\n");
+                    let diff = compute_unified_diff(
+                        file_path,
+                        &original_normalized,
+                        &modified_normalized,
+                    );
+                    if diff.trim().is_empty() {
+                        let fallback = build_fallback_diff(
+                            file_path,
+                            target_file_content,
+                            &task.persona,
+                            &task.objective,
+                        );
+                        (fallback, 0.45)
+                    } else {
+                        let confidence =
+                            estimate_llm_confidence(task, &original_normalized, &modified_normalized);
+                        (diff, confidence)
+                    }
+                }
+                (None, Some(ref modified)) => {
+                    let modified_normalized = modified.replace("\r\n", "\n");
+                    let diff = compute_unified_diff(file_path, "", &modified_normalized);
+                    (diff, 0.60)
+                }
+                _ => {
+                    let fallback = build_fallback_diff(
+                        file_path,
+                        target_file_content,
+                        &task.persona,
+                        &task.objective,
+                    );
+                    (fallback, 0.42)
+                }
+            };
 
             let output_tokens = response.output_tokens.or_else(|| {
                 response
@@ -271,7 +354,12 @@ fn try_remote_model_generation(
                     .map(|input_tokens| (input_tokens / 6).max(1))
             });
 
-            Ok(Some((intent_description, note_line, output_tokens)))
+            Ok(Some(RemoteGenerationResult {
+                intent_description,
+                diff_content,
+                confidence,
+                output_tokens,
+            }))
         }
         Err(error) => {
             if strict_model_adapter_enabled() {
@@ -314,21 +402,28 @@ fn build_remote_prompts(
 ) -> (String, String) {
     let system_prompt =
         r#"You are a Tier-3 software specialist for Autonomous Orchestration Platform (AOP).
+You will receive a file to modify and an objective.
+Apply the MINIMUM changes needed to accomplish the objective.
+
 Respond with JSON only:
 {
-  "intentDescription": "short sentence",
-  "noteLine": "single-line code comment to insert at top of file"
+  "intentDescription": "what this change accomplishes",
+  "modifiedContent": "the COMPLETE modified file content with your changes applied",
+  "changesSummary": ["change 1", "change 2"]
 }
+
 Rules:
-- Do not include markdown fences.
-- noteLine must be one line, <= 180 chars.
-- Focus on safe, minimal, behavior-preserving intent."#
+- Return the FULL file content with your modifications applied in modifiedContent.
+- Make minimal, focused changes — do not rewrite unrelated code.
+- Preserve existing formatting, style, and indentation.
+- If the objective cannot be safely accomplished, set modifiedContent to null and explain in intentDescription.
+- Do not wrap the JSON response in markdown fences."#
             .to_string();
 
     let context_excerpt = task
         .code_context
         .iter()
-        .take(2)
+        .take(3)
         .map(|block| {
             format!(
                 "[{}:{}-{}]\n{}",
@@ -338,17 +433,30 @@ Rules:
         .collect::<Vec<_>>()
         .join("\n\n");
 
-    let file_excerpt = target_file_content
-        .map(|content| content.chars().take(1_400).collect::<String>())
-        .unwrap_or_else(|| "<unavailable>".to_string());
+    let file_content = target_file_content
+        .map(|content| {
+            if content.len() > 32_000 {
+                let truncated: String = content.chars().take(32_000).collect();
+                format!("{truncated}\n\n... [truncated at 32000 chars]")
+            } else {
+                content.to_string()
+            }
+        })
+        .unwrap_or_else(|| "<file not available — create new file content>".to_string());
+
+    let constraints_text = if task.constraints.is_empty() {
+        "none".to_string()
+    } else {
+        task.constraints.join(" | ")
+    };
 
     let user_prompt = format!(
-        "persona: {}\nobjective: {}\nfilePath: {}\nconstraints: {}\n\nfileExcerpt:\n{}\n\ncodeContext:\n{}\n",
+        "persona: {}\nobjective: {}\nfilePath: {}\nconstraints: {}\n\n--- FILE CONTENT START ---\n{}\n--- FILE CONTENT END ---\n\ncodeContext:\n{}\n",
         task.persona.trim(),
         task.objective.trim(),
         file_path,
-        task.constraints.join(" | "),
-        file_excerpt,
+        constraints_text,
+        file_content,
         context_excerpt
     );
 
@@ -361,20 +469,31 @@ fn parse_specialist_model_output(raw: &str) -> Option<SpecialistModelOutput> {
         return None;
     }
 
-    if let Ok(parsed) = serde_json::from_str::<SpecialistModelOutput>(trimmed) {
+    let cleaned = strip_code_fences(trimmed);
+
+    if let Ok(parsed) = serde_json::from_str::<SpecialistModelOutput>(&cleaned) {
         return Some(parsed);
     }
-    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+    if let Ok(value) = serde_json::from_str::<Value>(&cleaned) {
         if let Some(object) = value.as_object() {
             let payload = SpecialistModelOutput {
                 intent_description: object
                     .get("intentDescription")
                     .and_then(Value::as_str)
                     .map(str::to_string),
-                note_line: object
-                    .get("noteLine")
+                modified_content: object
+                    .get("modifiedContent")
                     .and_then(Value::as_str)
                     .map(str::to_string),
+                changes_summary: object
+                    .get("changesSummary")
+                    .and_then(Value::as_array)
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(Value::as_str)
+                            .map(str::to_string)
+                            .collect()
+                    }),
             };
             return Some(payload);
         }
@@ -382,95 +501,62 @@ fn parse_specialist_model_output(raw: &str) -> Option<SpecialistModelOutput> {
     None
 }
 
-fn sanitize_llm_note_line(raw: &str, file_path: &str) -> Option<String> {
-    let single_line = raw
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .chars()
-        .take(180)
-        .collect::<String>();
-
-    if single_line.is_empty() {
-        return None;
-    }
-
-    let comment_body = extract_comment_body(&single_line).to_string();
-    let normalized_body = if comment_body.contains("AOP(") {
-        comment_body
-    } else {
-        format!("AOP(llm): {comment_body}")
-    };
-
-    let wrapped = match file_path.rsplit('.').next() {
-        Some("py") => format!("# {normalized_body}"),
-        Some("md") => format!("<!-- {normalized_body} -->"),
-        _ => format!("// {normalized_body}"),
-    };
-    Some(wrapped)
+/// Compute a proper unified diff using the `similar` crate.
+/// This guarantees valid patch format with correct hunk headers.
+pub fn compute_unified_diff(file_path: &str, original: &str, modified: &str) -> String {
+    let diff = TextDiff::from_lines(original, modified);
+    diff.unified_diff()
+        .context_radius(3)
+        .header(&format!("a/{file_path}"), &format!("b/{file_path}"))
+        .to_string()
 }
 
-fn extract_comment_body(single_line: &str) -> &str {
-    let trimmed = single_line.trim();
-    if let Some(value) = trimmed.strip_prefix("// ") {
-        return value.trim();
-    }
-    if let Some(value) = trimmed.strip_prefix("# ") {
-        return value.trim();
-    }
-    if let Some(value) = trimmed.strip_prefix("<!-- ") {
-        if let Some(value) = value.strip_suffix(" -->") {
-            return value.trim();
+fn strip_code_fences(input: &str) -> String {
+    let trimmed = input.trim();
+
+    if let Some(rest) = trimmed.strip_prefix("```") {
+        let after_lang = if let Some(newline_pos) = rest.find('\n') {
+            &rest[newline_pos + 1..]
+        } else {
+            rest
+        };
+        if let Some(content) = after_lang.strip_suffix("```") {
+            return content.trim().to_string();
         }
     }
-    trimmed
+
+    trimmed.to_string()
 }
 
-fn build_note_line(
-    persona: &str,
-    model_id: Option<&str>,
-    objective: &str,
+fn build_fallback_diff(
     file_path: &str,
+    target_file_content: Option<&str>,
+    persona: &str,
+    objective: &str,
 ) -> String {
-    let compact_objective = objective
+    let compact_objective: String = objective
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
         .chars()
         .take(120)
-        .collect::<String>();
+        .collect();
 
-    let model_fragment = model_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| format!(" model={value}"))
-        .unwrap_or_default();
-    let note = format!("AOP({persona}{model_fragment}): {compact_objective} [{file_path}]");
-    match file_path.rsplit('.').next() {
-        Some("py") => format!("# {note}"),
-        Some("md") => format!("<!-- {note} -->"),
-        _ => format!("// {note}"),
-    }
-}
+    let comment = match file_path.rsplit('.').next() {
+        Some("py") => format!("# AOP({persona}): {compact_objective}"),
+        Some("md") => format!("<!-- AOP({persona}): {compact_objective} -->"),
+        _ => format!("// AOP({persona}): {compact_objective}"),
+    };
 
-fn build_unified_diff(
-    file_path: &str,
-    note_line: &str,
-    target_file_content: Option<&str>,
-) -> String {
-    match target_file_content {
-        Some(content) => {
-            let first_line = content.lines().next().unwrap_or("");
-            if first_line.is_empty() {
-                format!("--- a/{file_path}\n+++ b/{file_path}\n@@ -0,0 +1,1 @@\n+{note_line}\n")
-            } else {
-                format!(
-                    "--- a/{file_path}\n+++ b/{file_path}\n@@ -1,1 +1,2 @@\n+{note_line}\n {first_line}\n"
-                )
-            }
-        }
-        None => format!("--- a/{file_path}\n+++ b/{file_path}\n@@ -0,0 +1,1 @@\n+{note_line}\n"),
-    }
+    let original = target_file_content.unwrap_or("");
+    let original_normalized = original.replace("\r\n", "\n");
+    let modified = if original_normalized.is_empty() {
+        format!("{comment}\n")
+    } else {
+        format!("{comment}\n{original_normalized}")
+    };
+
+    compute_unified_diff(file_path, &original_normalized, &modified)
 }
 
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
@@ -529,7 +615,9 @@ mod tests {
 
         assert_eq!(proposal.task_id, "task-1");
         assert!(proposal.diff_content.contains("--- a/src/session.tsx"));
-        assert!(proposal.confidence >= 0.5);
+        assert!(proposal.diff_content.contains("+++ b/src/session.tsx"));
+        assert!(proposal.diff_content.contains("@@"));
+        assert!(proposal.confidence >= 0.3);
         assert!(proposal.tokens_used > 0);
     }
 
@@ -556,13 +644,67 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_llm_note_line_wraps_for_language() {
-        let ts = sanitize_llm_note_line("short note", "src/file.ts")
-            .expect("typescript line should sanitize");
-        let py = sanitize_llm_note_line("short note", "src/file.py")
-            .expect("python line should sanitize");
+    fn compute_unified_diff_generates_valid_patch() {
+        let original = "line 1\nline 2\nline 3\n";
+        let modified = "line 1\nline 2 modified\nline 3\nnew line 4\n";
+        let diff = compute_unified_diff("src/test.ts", original, modified);
 
-        assert!(ts.starts_with("// "));
-        assert!(py.starts_with("# "));
+        assert!(diff.contains("--- a/src/test.ts"));
+        assert!(diff.contains("+++ b/src/test.ts"));
+        assert!(diff.contains("@@"));
+        assert!(diff.contains("+line 2 modified"));
+        assert!(diff.contains("-line 2"));
+        assert!(diff.contains("+new line 4"));
+    }
+
+    #[test]
+    fn compute_unified_diff_handles_new_file() {
+        let diff = compute_unified_diff("src/new.ts", "", "export const x = 1;\n");
+
+        assert!(diff.contains("--- a/src/new.ts"));
+        assert!(diff.contains("+++ b/src/new.ts"));
+        assert!(diff.contains("+export const x = 1;"));
+    }
+
+    #[test]
+    fn strip_code_fences_removes_json_wrapper() {
+        let fenced = "```json\n{\"key\": \"value\"}\n```";
+        assert_eq!(strip_code_fences(fenced), "{\"key\": \"value\"}");
+
+        let plain = "{\"key\": \"value\"}";
+        assert_eq!(strip_code_fences(plain), "{\"key\": \"value\"}");
+    }
+
+    #[test]
+    fn fallback_diff_is_valid_unified_format() {
+        let diff = build_fallback_diff(
+            "src/app.tsx",
+            Some("const App = () => null;\n"),
+            "react_specialist",
+            "Improve component",
+        );
+
+        assert!(diff.contains("--- a/src/app.tsx"));
+        assert!(diff.contains("+++ b/src/app.tsx"));
+        assert!(diff.contains("@@"));
+        assert!(diff.contains("AOP(react_specialist)"));
+    }
+
+    #[test]
+    fn parse_specialist_output_extracts_modified_content() {
+        let raw = r#"{"intentDescription":"add guard","modifiedContent":"const x = 1;\n","changesSummary":["added guard"]}"#;
+        let parsed = parse_specialist_model_output(raw).expect("should parse");
+        assert_eq!(
+            parsed.intent_description.as_deref(),
+            Some("add guard")
+        );
+        assert_eq!(
+            parsed.modified_content.as_deref(),
+            Some("const x = 1;\n")
+        );
+        assert_eq!(
+            parsed.changes_summary.as_deref(),
+            Some(&["added guard".to_string()][..])
+        );
     }
 }

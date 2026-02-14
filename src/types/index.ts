@@ -55,6 +55,38 @@ export interface OrchestrationResult {
   distributedBudget: number
 }
 
+export interface AnalyzeObjectiveInput {
+  objective: string
+  targetProject: string
+  globalTokenBudget: number
+}
+
+export interface ObjectiveAnalysis {
+  rootTaskId: string
+  questions: string[]
+  initialAnalysis: string
+  suggestedApproach: string
+  fileTreeSummary: string
+}
+
+export interface GeneratePlanInput {
+  rootTaskId: string
+  objective: string
+  answers: Record<string, string>
+  targetProject: string
+  globalTokenBudget: number
+  maxRiskTolerance: number
+}
+
+export interface GeneratedPlan {
+  rootTask: TaskRecord
+  assignments: TaskAssignment[]
+  riskAssessment: string
+  overheadBudget: number
+  reserveBudget: number
+  distributedBudget: number
+}
+
 export interface ApproveOrchestrationPlanInput {
   rootTaskId: string
   targetProject: string

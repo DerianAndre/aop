@@ -130,6 +130,8 @@ pub fn run() {
             commands::list_task_budget_requests,
             commands::resolve_task_budget_request,
             commands::orchestrate_objective,
+            commands::analyze_objective,
+            commands::submit_answers_and_plan,
             commands::approve_orchestration_plan,
             commands::execute_domain_task,
             commands::list_task_mutations,

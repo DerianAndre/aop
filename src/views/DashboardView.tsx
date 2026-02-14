@@ -10,14 +10,16 @@ import { Textarea } from '@/components/ui/textarea'
 import TokenBurnChart from '@/components/TokenBurnChart'
 import { useTargetProjectConfig } from '@/hooks/useTargetProjectConfig'
 import {
+  analyzeObjective,
   approveOrchestrationPlan,
   controlTask,
   getTasks,
   orchestrateObjective,
+  submitAnswersAndPlan,
 } from '@/hooks/useTauri'
 import { executeRestartApply, formatRestartApplyIssue } from '@/lib/restartApply'
 import { useAopStore } from '@/store/aop-store'
-import type { OrchestrationResult, PlanExecutionResult, TaskControlAction, TaskRecord } from '@/types'
+import type { GeneratedPlan, ObjectiveAnalysis, OrchestrationResult, PlanExecutionResult, TaskControlAction, TaskRecord } from '@/types'
 
 function formatNumber(value: number): string {
   return new Intl.NumberFormat().format(value)
@@ -125,6 +127,13 @@ export function DashboardView() {
   const [orchestrationResult, setOrchestrationResult] = useState<OrchestrationResult | null>(null)
   const [isApprovingPlan, setIsApprovingPlan] = useState(false)
   const [planExecutionResult, setPlanExecutionResult] = useState<PlanExecutionResult | null>(null)
+
+  // LLM analysis flow state
+  const [isAnalyzing, setIsAnalyzing] = useState(false)
+  const [analysisResult, setAnalysisResult] = useState<ObjectiveAnalysis | null>(null)
+  const [userAnswers, setUserAnswers] = useState<Record<string, string>>({})
+  const [isGeneratingPlan, setIsGeneratingPlan] = useState(false)
+  const [generatedPlan, setGeneratedPlan] = useState<GeneratedPlan | null>(null)
 
   const loadTasks = useCallback(async () => {
     setIsLoadingTasks(true)
@@ -280,6 +289,91 @@ export function DashboardView() {
     }
   }
 
+  async function handleAnalyzeObjective() {
+    const target = targetProject.trim()
+    const trimmedObjective = objective.trim()
+
+    if (!target) {
+      setOrchestrationError('Target project path is required.')
+      return
+    }
+    if (!trimmedObjective) {
+      setOrchestrationError('Objective is required.')
+      return
+    }
+
+    setOrchestrationError(null)
+    setIsAnalyzing(true)
+    setAnalysisResult(null)
+    setGeneratedPlan(null)
+    setUserAnswers({})
+    try {
+      const result = await analyzeObjective({
+        objective: trimmedObjective,
+        targetProject: target,
+        globalTokenBudget: Math.floor(globalTokenBudget),
+      })
+      setAnalysisResult(result)
+      const initialAnswers: Record<string, string> = {}
+      result.questions.forEach((q, i) => {
+        initialAnswers[`q${i}`] = ''
+      })
+      setUserAnswers(initialAnswers)
+      await loadTasks()
+    } catch (error) {
+      setOrchestrationError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setIsAnalyzing(false)
+    }
+  }
+
+  async function handleSubmitAnswersAndPlan() {
+    if (!analysisResult) {
+      return
+    }
+    const target = targetProject.trim()
+    if (!target) {
+      setOrchestrationError('Target project path is required.')
+      return
+    }
+
+    const answersMap: Record<string, string> = {}
+    analysisResult.questions.forEach((q, i) => {
+      const answer = userAnswers[`q${i}`]?.trim()
+      if (answer) {
+        answersMap[q] = answer
+      }
+    })
+
+    setOrchestrationError(null)
+    setIsGeneratingPlan(true)
+    try {
+      const result = await submitAnswersAndPlan({
+        rootTaskId: analysisResult.rootTaskId,
+        objective: objective.trim(),
+        answers: answersMap,
+        targetProject: target,
+        globalTokenBudget: Math.floor(globalTokenBudget),
+        maxRiskTolerance: Number(maxRiskTolerance.toFixed(2)),
+      })
+      setGeneratedPlan(result)
+      setOrchestrationResult({
+        rootTask: result.rootTask,
+        assignments: result.assignments,
+        overheadBudget: result.overheadBudget,
+        reserveBudget: result.reserveBudget,
+        distributedBudget: result.distributedBudget,
+      })
+      setPlanExecutionResult(null)
+      setObjective('')
+      await loadTasks()
+    } catch (error) {
+      setOrchestrationError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setIsGeneratingPlan(false)
+    }
+  }
+
   const activeTasks = useMemo(
     () => tasks.filter((task) => task.status !== 'completed' && task.status !== 'failed').length,
     [tasks],
@@ -412,10 +506,77 @@ export function DashboardView() {
 
             {orchestrationError ? <p className="text-destructive text-sm">{orchestrationError}</p> : null}
 
-            <Button disabled={isOrchestrating} type="submit">
-              {isOrchestrating ? 'Orchestrating...' : 'Decompose Objective'}
-            </Button>
+            <div className="flex gap-2">
+              <Button disabled={isOrchestrating || isAnalyzing} type="submit">
+                {isOrchestrating ? 'Orchestrating...' : 'Quick Decompose (Fast Path)'}
+              </Button>
+              <Button
+                disabled={isOrchestrating || isAnalyzing}
+                onClick={(e) => {
+                  e.preventDefault()
+                  void handleAnalyzeObjective()
+                }}
+                type="button"
+                variant="secondary"
+              >
+                {isAnalyzing ? 'Analyzing...' : 'Analyze & Ask Questions (LLM)'}
+              </Button>
+            </div>
           </form>
+
+          {analysisResult && !generatedPlan ? (
+            <div className="space-y-4 rounded-md border p-4">
+              <div>
+                <h4 className="text-sm font-semibold">LLM Analysis</h4>
+                <p className="text-muted-foreground text-sm">{analysisResult.initialAnalysis}</p>
+              </div>
+              {analysisResult.suggestedApproach ? (
+                <div>
+                  <h4 className="text-sm font-semibold">Suggested Approach</h4>
+                  <p className="text-muted-foreground text-sm">{analysisResult.suggestedApproach}</p>
+                </div>
+              ) : null}
+              {analysisResult.questions.length > 0 ? (
+                <div className="space-y-3">
+                  <h4 className="text-sm font-semibold">Clarifying Questions</h4>
+                  {analysisResult.questions.map((question, idx) => (
+                    <div className="space-y-1" key={idx}>
+                      <Label className="text-sm" htmlFor={`analysis-q-${idx}`}>
+                        {question}
+                      </Label>
+                      <Input
+                        id={`analysis-q-${idx}`}
+                        onChange={(e) =>
+                          setUserAnswers((prev) => ({
+                            ...prev,
+                            [`q${idx}`]: e.target.value,
+                          }))
+                        }
+                        placeholder="Your answer..."
+                        value={userAnswers[`q${idx}`] ?? ''}
+                      />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-muted-foreground text-sm">No questions needed — objective is clear.</p>
+              )}
+              <Button
+                disabled={isGeneratingPlan}
+                onClick={() => void handleSubmitAnswersAndPlan()}
+                type="button"
+              >
+                {isGeneratingPlan ? 'Generating Plan...' : 'Submit Answers & Generate Plan'}
+              </Button>
+            </div>
+          ) : null}
+
+          {generatedPlan?.riskAssessment ? (
+            <div className="rounded-md border border-yellow-500/30 bg-yellow-500/5 p-3">
+              <h4 className="text-sm font-semibold">Risk Assessment</h4>
+              <p className="text-muted-foreground text-sm">{generatedPlan.riskAssessment}</p>
+            </div>
+          ) : null}
 
           {orchestrationResult ? (
             <div className="space-y-3 rounded-md border p-4">

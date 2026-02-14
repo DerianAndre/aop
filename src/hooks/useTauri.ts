@@ -4,6 +4,7 @@ import type {
   AgentEventRecord,
   AgentRunRecord,
   AgentTerminalSession,
+  AnalyzeObjectiveInput,
   ArchiveTelemetryInput,
   ArchiveTelemetryResult,
   ApproveOrchestrationPlanInput,
@@ -15,6 +16,8 @@ import type {
   ControlTaskInput,
   DirectoryListing,
   ExecuteDomainTaskInput,
+  GeneratePlanInput,
+  GeneratedPlan,
   IndexProjectResult,
   IndexTargetProjectInput,
   IntentSummary,
@@ -32,6 +35,7 @@ import type {
   ModelRegistrySnapshot,
   MissionControlSnapshot,
   MutationRevisionResult,
+  ObjectiveAnalysis,
   OrchestrationResult,
   PlanExecutionResult,
   QueryCodebaseInput,
@@ -90,6 +94,14 @@ export async function resolveTaskBudgetRequest(input: ResolveTaskBudgetRequestIn
 
 export async function orchestrateObjective(input: UserObjectiveInput): Promise<OrchestrationResult> {
   return invoke<OrchestrationResult>('orchestrate_objective', { input })
+}
+
+export async function analyzeObjective(input: AnalyzeObjectiveInput): Promise<ObjectiveAnalysis> {
+  return invoke<ObjectiveAnalysis>('analyze_objective', { input })
+}
+
+export async function submitAnswersAndPlan(input: GeneratePlanInput): Promise<GeneratedPlan> {
+  return invoke<GeneratedPlan>('submit_answers_and_plan', { input })
 }
 
 export async function approveOrchestrationPlan(input: ApproveOrchestrationPlanInput): Promise<PlanExecutionResult> {

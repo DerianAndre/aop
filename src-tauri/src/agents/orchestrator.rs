@@ -6,6 +6,8 @@ use std::time::Instant;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
+use std::collections::HashMap;
+
 use crate::agents::domain_leader::{self, ExecuteDomainTaskInput};
 use crate::agents::specialist::{self, SpecialistTask};
 use crate::agents::CodeBlock;
@@ -14,6 +16,7 @@ use crate::db::tasks::{
     self, CreateTaskRecordInput, TaskRecord, TaskStatus, UpdateTaskOutcomeInput,
     UpdateTaskStatusInput,
 };
+use crate::llm_adapter::{self, AdapterRequest};
 use crate::mcp_bridge::client::BridgeClient;
 use crate::mcp_bridge::tool_caller::{self, ReadTargetFileInput};
 use crate::model_intelligence::{self, ModelSelectionRequest};
@@ -61,6 +64,7 @@ struct AssignmentDraft {
     tier: u8,
     domain: String,
     objective: String,
+    target_files: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -84,6 +88,89 @@ pub struct PlanExecutionResult {
     pub failed_executions: u32,
     pub message: String,
 }
+
+// --- New types for LLM-driven orchestration ---
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnalyzeObjectiveInput {
+    pub objective: String,
+    pub target_project: String,
+    pub global_token_budget: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ObjectiveAnalysis {
+    pub root_task_id: String,
+    pub questions: Vec<String>,
+    pub initial_analysis: String,
+    pub suggested_approach: String,
+    pub file_tree_summary: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeneratePlanInput {
+    pub root_task_id: String,
+    pub objective: String,
+    pub answers: HashMap<String, String>,
+    pub target_project: String,
+    pub global_token_budget: u32,
+    pub max_risk_tolerance: f32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeneratedPlan {
+    pub root_task: TaskRecord,
+    pub assignments: Vec<TaskAssignment>,
+    pub risk_assessment: String,
+    pub overhead_budget: u32,
+    pub reserve_budget: u32,
+    pub distributed_budget: u32,
+}
+
+// Internal LLM response types
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LlmAnalysisResponse {
+    #[serde(default)]
+    questions: Vec<String>,
+    #[serde(default)]
+    initial_analysis: Option<String>,
+    #[serde(default)]
+    suggested_approach: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LlmPlanResponse {
+    #[serde(default)]
+    tasks: Vec<LlmPlannedTask>,
+    #[serde(default)]
+    risk_assessment: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LlmPlannedTask {
+    objective: String,
+    domain: String,
+    #[serde(default = "default_tier")]
+    tier: u8,
+    #[serde(default)]
+    target_files: Vec<String>,
+    #[serde(default)]
+    rationale: Option<String>,
+}
+
+fn default_tier() -> u8 {
+    3
+}
+
+// --- Orchestration functions ---
 
 pub async fn orchestrate_and_persist(
     pool: &SqlitePool,
@@ -109,14 +196,16 @@ pub async fn orchestrate_and_persist(
     let domain = infer_primary_domain(&objective);
     let target_root = normalize_project_root(&input.target_project)?;
     let all_candidate_files = collect_source_files(&target_root, 600)?;
-    let complexity_score = estimate_objective_complexity(
+    let file_tree_summary = build_file_tree_summary(&all_candidate_files, 120);
+    let drafts = generate_drafts_with_llm(
+        &tier1_model.provider,
+        &tier1_model.model_id,
         &objective,
         &domain,
-        all_candidate_files.len(),
+        &file_tree_summary,
+        input.global_token_budget,
         input.max_risk_tolerance,
     );
-    let assignment_count = desired_assignment_count(&objective, complexity_score);
-    let drafts = build_assignment_drafts(&domain, assignment_count, complexity_score);
 
     let overhead_budget = ((input.global_token_budget as f32) * 0.10).round() as u32;
     let reserve_budget = ((input.global_token_budget as f32) * 0.10).round() as u32;
@@ -171,11 +260,10 @@ pub async fn orchestrate_and_persist(
         "orchestration_context_built",
         &root_task.id,
         &format!(
-            "assignmentCount={} candidateFiles={} distributedBudget={} complexity={:.2}",
+            "assignmentCount={} candidateFiles={} distributedBudget={} llmDriven=true",
             drafts.len(),
             all_candidate_files.len(),
-            distributed_budget,
-            complexity_score
+            distributed_budget
         ),
     )
     .await?;
@@ -185,8 +273,11 @@ pub async fn orchestrate_and_persist(
         Vec::with_capacity(drafts.len());
 
     for draft in &drafts {
-        let relevant_files =
-            find_relevant_files(&all_candidate_files, &draft.domain, &draft.objective, 16);
+        let relevant_files = if draft.target_files.is_empty() {
+            find_relevant_files(&all_candidate_files, &draft.domain, &draft.objective, 16)
+        } else {
+            draft.target_files.clone()
+        };
         let p_failure = estimate_failure_probability(&objective, &draft.objective, &draft.domain);
         let impact = estimate_impact(relevant_files.len());
         let coverage = estimate_test_coverage(&relevant_files);
@@ -917,6 +1008,376 @@ fn validate_approve_input(input: &ApproveOrchestrationPlanInput) -> Result<(), S
     Ok(())
 }
 
+// --- LLM-driven orchestration ---
+
+pub async fn analyze_objective(
+    pool: &SqlitePool,
+    model_registry: &ModelRegistry,
+    input: AnalyzeObjectiveInput,
+) -> Result<ObjectiveAnalysis, String> {
+    if input.objective.trim().is_empty() {
+        return Err("objective is required".to_string());
+    }
+    if input.target_project.trim().is_empty() {
+        return Err("targetProject is required".to_string());
+    }
+
+    let objective = input.objective.trim().to_string();
+    let target_root = normalize_project_root(&input.target_project)?;
+    let source_files = collect_source_files(&target_root, 600)?;
+    let file_tree_summary = build_file_tree_summary(&source_files, 120);
+
+    let tier1_model = model_intelligence::select_model(
+        pool,
+        model_registry,
+        ModelSelectionRequest {
+            task_id: None,
+            actor: "tier1_orchestrator",
+            tier: 1,
+            persona: None,
+            skill: Some("objective_analysis"),
+        },
+    )
+    .await?
+    .selection;
+
+    let root_task = tasks::create_task_record(
+        pool,
+        CreateTaskRecordInput {
+            parent_id: None,
+            tier: 1,
+            domain: infer_primary_domain(&objective),
+            objective: format!("Analyze objective: {objective}"),
+            token_budget: (input.global_token_budget / 10).max(100) as i64,
+            risk_factor: 0.0,
+            status: TaskStatus::Executing,
+        },
+    )
+    .await?;
+
+    task_runtime::record_task_activity(
+        pool,
+        "tier1_orchestrator",
+        "objective_analysis_started",
+        &root_task.id,
+        &format!(
+            "objective={} model={}/{} files={}",
+            objective, tier1_model.provider, tier1_model.model_id, source_files.len()
+        ),
+    )
+    .await?;
+
+    let system_prompt = r#"You are a Tier-1 orchestrator for the Autonomous Orchestration Platform (AOP).
+Your job is to analyze a user's objective and generate clarifying questions that will help create a precise implementation plan.
+
+Respond with JSON only:
+{
+  "questions": ["question 1", "question 2"],
+  "initialAnalysis": "Your understanding of what needs to be done",
+  "suggestedApproach": "High-level approach you would recommend"
+}
+
+Rules:
+- Generate 2-5 focused questions about ambiguous requirements, constraints, or preferences
+- Questions should be answerable in 1-2 sentences
+- Focus on: scope boundaries, technology preferences, testing expectations, risk tolerance
+- If the objective is crystal clear and simple, you may return 0 questions
+- Your initialAnalysis should demonstrate understanding of the codebase context provided"#
+        .to_string();
+
+    let user_prompt = format!(
+        "OBJECTIVE:\n{}\n\nPROJECT FILE TREE ({} files):\n{}\n\nGenerate clarifying questions and initial analysis.",
+        objective,
+        source_files.len(),
+        file_tree_summary
+    );
+
+    let request = AdapterRequest {
+        provider: tier1_model.provider.clone(),
+        model_id: tier1_model.model_id.clone(),
+        system_prompt,
+        user_prompt,
+    };
+
+    let llm_result = tokio::task::spawn_blocking(move || llm_adapter::generate(&request))
+        .await
+        .map_err(|error| format!("LLM task panicked: {error}"))?;
+
+    let response = match llm_result {
+        Ok(resp) => resp,
+        Err(error) => {
+            tasks::update_task_status(
+                pool,
+                UpdateTaskStatusInput {
+                    task_id: root_task.id.clone(),
+                    status: TaskStatus::Paused,
+                    error_message: Some(format!("LLM analysis failed: {error}")),
+                },
+            )
+            .await?;
+            return Err(format!("LLM analysis failed: {error}"));
+        }
+    };
+
+    let analysis = parse_analysis_response(&response.text)?;
+
+    tasks::update_task_status(
+        pool,
+        UpdateTaskStatusInput {
+            task_id: root_task.id.clone(),
+            status: TaskStatus::Paused,
+            error_message: Some("analysis_complete: awaiting user answers".to_string()),
+        },
+    )
+    .await?;
+
+    task_runtime::record_task_activity(
+        pool,
+        "tier1_orchestrator",
+        "objective_analysis_completed",
+        &root_task.id,
+        &format!(
+            "questions={} model={}/{}",
+            analysis.questions.len(),
+            tier1_model.provider,
+            tier1_model.model_id
+        ),
+    )
+    .await?;
+
+    Ok(ObjectiveAnalysis {
+        root_task_id: root_task.id,
+        questions: analysis.questions,
+        initial_analysis: analysis.initial_analysis.unwrap_or_default(),
+        suggested_approach: analysis.suggested_approach.unwrap_or_default(),
+        file_tree_summary,
+    })
+}
+
+pub async fn generate_plan(
+    pool: &SqlitePool,
+    model_registry: &ModelRegistry,
+    input: GeneratePlanInput,
+) -> Result<GeneratedPlan, String> {
+    if input.root_task_id.trim().is_empty() {
+        return Err("rootTaskId is required".to_string());
+    }
+    if input.objective.trim().is_empty() {
+        return Err("objective is required".to_string());
+    }
+    if input.target_project.trim().is_empty() {
+        return Err("targetProject is required".to_string());
+    }
+    if input.global_token_budget < 100 {
+        return Err("globalTokenBudget must be at least 100".to_string());
+    }
+
+    let objective = input.objective.trim().to_string();
+    let target_root = normalize_project_root(&input.target_project)?;
+    let source_files = collect_source_files(&target_root, 600)?;
+    let file_tree_summary = build_file_tree_summary(&source_files, 120);
+
+    let tier1_model = model_intelligence::select_model(
+        pool,
+        model_registry,
+        ModelSelectionRequest {
+            task_id: Some(&input.root_task_id),
+            actor: "tier1_orchestrator",
+            tier: 1,
+            persona: None,
+            skill: Some("plan_generation"),
+        },
+    )
+    .await?
+    .selection;
+
+    tasks::update_task_status(
+        pool,
+        UpdateTaskStatusInput {
+            task_id: input.root_task_id.clone(),
+            status: TaskStatus::Executing,
+            error_message: None,
+        },
+    )
+    .await?;
+
+    task_runtime::record_task_activity(
+        pool,
+        "tier1_orchestrator",
+        "plan_generation_started",
+        &input.root_task_id,
+        &format!(
+            "objective={} answers={} model={}/{}",
+            objective,
+            input.answers.len(),
+            tier1_model.provider,
+            tier1_model.model_id
+        ),
+    )
+    .await?;
+
+    let answers_formatted = if input.answers.is_empty() {
+        "No clarifying answers provided (user skipped questions).".to_string()
+    } else {
+        input
+            .answers
+            .iter()
+            .map(|(q, a)| format!("Q: {q}\nA: {a}"))
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    };
+
+    let system_prompt = build_plan_generation_prompt();
+    let user_prompt = format!(
+        "OBJECTIVE:\n{}\n\nUSER ANSWERS:\n{}\n\nPROJECT FILE TREE ({} files):\n{}\n\nTOKEN BUDGET: {}\nRISK TOLERANCE: {:.2}\n\nGenerate the implementation plan.",
+        objective,
+        answers_formatted,
+        source_files.len(),
+        file_tree_summary,
+        input.global_token_budget,
+        input.max_risk_tolerance
+    );
+
+    let request = AdapterRequest {
+        provider: tier1_model.provider.clone(),
+        model_id: tier1_model.model_id.clone(),
+        system_prompt,
+        user_prompt,
+    };
+
+    let llm_result = tokio::task::spawn_blocking(move || llm_adapter::generate(&request))
+        .await
+        .map_err(|error| format!("LLM task panicked: {error}"))?;
+
+    let response = match llm_result {
+        Ok(resp) => resp,
+        Err(error) => {
+            tasks::update_task_status(
+                pool,
+                UpdateTaskStatusInput {
+                    task_id: input.root_task_id.clone(),
+                    status: TaskStatus::Failed,
+                    error_message: Some(format!("LLM plan generation failed: {error}")),
+                },
+            )
+            .await?;
+            return Err(format!("LLM plan generation failed: {error}"));
+        }
+    };
+
+    let plan = parse_plan_response(&response.text)?;
+    if plan.tasks.is_empty() {
+        return Err("LLM returned an empty task plan".to_string());
+    }
+
+    let overhead_budget = ((input.global_token_budget as f32) * 0.10).round() as u32;
+    let reserve_budget = ((input.global_token_budget as f32) * 0.10).round() as u32;
+    let distributed_budget = input
+        .global_token_budget
+        .saturating_sub(overhead_budget + reserve_budget);
+
+    let weights: Vec<f32> = plan
+        .tasks
+        .iter()
+        .map(|t| if t.tier <= 2 { 2.0 } else { 1.0 })
+        .collect();
+    let budgets = allocate_token_budgets(distributed_budget.max(1), &weights);
+
+    let root_task = tasks::get_task_by_id(pool, &input.root_task_id).await?;
+    let mut assignments = Vec::with_capacity(plan.tasks.len());
+
+    for (idx, llm_task) in plan.tasks.iter().enumerate() {
+        let domain = normalize_domain(&llm_task.domain);
+        let tier = llm_task.tier.clamp(2, 3);
+        let risk_factor = estimate_failure_probability(&objective, &llm_task.objective, &domain);
+        let constraints = build_constraints(
+            &domain,
+            risk_factor,
+            input.max_risk_tolerance.clamp(0.0, 1.0),
+            &objective,
+        );
+
+        let created = tasks::create_task_record(
+            pool,
+            CreateTaskRecordInput {
+                parent_id: Some(input.root_task_id.clone()),
+                tier: i64::from(tier),
+                domain: domain.clone(),
+                objective: llm_task.objective.clone(),
+                token_budget: budgets[idx].max(1) as i64,
+                risk_factor: f64::from(risk_factor),
+                status: TaskStatus::Paused,
+            },
+        )
+        .await?;
+
+        task_runtime::record_task_activity(
+            pool,
+            "tier1_orchestrator",
+            "plan_assignment_created",
+            &created.id,
+            &format!(
+                "parent={} tier={} domain={} risk={:.3} budget={} files={} rationale={}",
+                input.root_task_id,
+                tier,
+                domain,
+                risk_factor,
+                budgets[idx],
+                llm_task.target_files.join(","),
+                llm_task.rationale.as_deref().unwrap_or("—")
+            ),
+        )
+        .await?;
+
+        assignments.push(TaskAssignment {
+            task_id: created.id,
+            parent_id: input.root_task_id.clone(),
+            tier,
+            domain,
+            objective: llm_task.objective.clone(),
+            token_budget: budgets[idx],
+            risk_factor,
+            constraints,
+            relevant_files: llm_task.target_files.clone(),
+        });
+    }
+
+    tasks::update_task_status(
+        pool,
+        UpdateTaskStatusInput {
+            task_id: input.root_task_id.clone(),
+            status: TaskStatus::Paused,
+            error_message: Some(
+                "plan_ready: LLM-generated plan awaiting review approval".to_string(),
+            ),
+        },
+    )
+    .await?;
+
+    task_runtime::record_task_activity(
+        pool,
+        "tier1_orchestrator",
+        "plan_generation_completed",
+        &input.root_task_id,
+        &format!(
+            "assignments={} model={}/{}",
+            assignments.len(),
+            tier1_model.provider,
+            tier1_model.model_id
+        ),
+    )
+    .await?;
+
+    Ok(GeneratedPlan {
+        root_task,
+        assignments,
+        risk_assessment: plan.risk_assessment.unwrap_or_default(),
+        overhead_budget,
+        reserve_budget,
+        distributed_budget,
+    })
+}
+
 fn infer_primary_domain(objective: &str) -> String {
     let value = objective.to_lowercase();
     if contains_any(
@@ -937,385 +1398,181 @@ fn infer_primary_domain(objective: &str) -> String {
     "platform".to_string()
 }
 
-fn estimate_objective_complexity(
+// --- LLM-driven draft generation with fallback ---
+
+fn generate_drafts_with_llm(
+    provider: &str,
+    model_id: &str,
     objective: &str,
     domain: &str,
-    candidate_files: usize,
-    max_risk_tolerance: f32,
-) -> f32 {
-    let value = objective.to_ascii_lowercase();
-    let mut score = 0.25_f32;
+    file_tree: &str,
+    token_budget: u32,
+    risk_tolerance: f32,
+) -> Vec<AssignmentDraft> {
+    let system_prompt = build_plan_generation_prompt();
+    let user_prompt = format!(
+        "OBJECTIVE:\n{}\n\nPROJECT FILE TREE:\n{}\n\nTOKEN BUDGET: {}\nRISK TOLERANCE: {:.2}\n\nGenerate the implementation plan.",
+        objective, file_tree, token_budget, risk_tolerance
+    );
 
-    if value.len() > 90 {
-        score += 0.12;
+    let request = AdapterRequest {
+        provider: provider.to_string(),
+        model_id: model_id.to_string(),
+        system_prompt,
+        user_prompt,
+    };
+
+    match llm_adapter::generate(&request) {
+        Ok(response) => {
+            if let Ok(plan) = parse_plan_response(&response.text) {
+                if !plan.tasks.is_empty() {
+                    return plan
+                        .tasks
+                        .iter()
+                        .take(6)
+                        .map(|t| AssignmentDraft {
+                            tier: t.tier.clamp(2, 3),
+                            domain: normalize_domain(&t.domain),
+                            objective: t.objective.clone(),
+                            target_files: t.target_files.clone(),
+                        })
+                        .collect();
+                }
+            }
+        }
+        Err(_) => {}
     }
-    if value.len() > 160 {
-        score += 0.08;
+
+    build_simple_fallback_drafts(domain, objective)
+}
+
+fn build_simple_fallback_drafts(domain: &str, objective: &str) -> Vec<AssignmentDraft> {
+    let objective_lower = objective.to_ascii_lowercase();
+    let is_complex = contains_any(
+        &objective_lower,
+        &["refactor", "rewrite", "migrate", "overhaul", "architecture"],
+    );
+
+    let mut drafts = Vec::new();
+
+    if is_complex {
+        drafts.push(AssignmentDraft {
+            tier: 2,
+            domain: domain.to_string(),
+            objective: format!("Coordinate and plan: {objective}"),
+            target_files: Vec::new(),
+        });
     }
-    if contains_any(
-        &value,
-        &[
-            "refactor",
-            "rewrite",
-            "migrate",
-            "overhaul",
-            "architecture",
-            "cross-cutting",
-        ],
-    ) {
-        score += 0.22;
+
+    drafts.push(AssignmentDraft {
+        tier: 3,
+        domain: domain.to_string(),
+        objective: format!("Implement core changes: {objective}"),
+        target_files: Vec::new(),
+    });
+
+    drafts.push(AssignmentDraft {
+        tier: 3,
+        domain: "testing".to_string(),
+        objective: format!("Add tests for: {objective}"),
+        target_files: Vec::new(),
+    });
+
+    if is_complex {
+        drafts.push(AssignmentDraft {
+            tier: 3,
+            domain: domain.to_string(),
+            objective: format!("Apply follow-up fixes: {objective}"),
+            target_files: Vec::new(),
+        });
     }
-    if contains_any(
-        &value,
-        &[
-            "security",
-            "auth",
-            "transaction",
-            "concurrency",
-            "consistency",
-            "state machine",
-        ],
-    ) {
-        score += 0.14;
-    }
-    if contains_any(
-        &value,
-        &["frontend", "react", "ui", "component", "routing", "form"],
-    ) && domain == "frontend"
+
+    drafts
+}
+
+fn build_plan_generation_prompt() -> String {
+    r#"You are a Tier-1 orchestrator for the Autonomous Orchestration Platform (AOP).
+Generate a concrete implementation plan broken into tasks that can be executed by Tier-2 domain leaders and Tier-3 specialists.
+
+Respond with JSON only:
+{
+  "tasks": [
     {
-        score += 0.08;
+      "objective": "what this task should accomplish",
+      "domain": "frontend|backend|auth|database|api|testing|platform",
+      "tier": 2 or 3,
+      "targetFiles": ["file/path1.ts", "file/path2.tsx"],
+      "rationale": "why this task is needed"
     }
-
-    score += ((candidate_files as f32) / 220.0).clamp(0.0, 0.20);
-    score += (0.65 - max_risk_tolerance.clamp(0.0, 1.0)).max(0.0) * 0.18;
-
-    score.clamp(0.05, 0.95)
+  ],
+  "riskAssessment": "overall risk analysis and mitigation notes"
 }
 
-fn desired_assignment_count(objective: &str, complexity: f32) -> usize {
-    let value = objective.to_ascii_lowercase();
-    let mut count: usize = if complexity >= 0.78 {
-        5
-    } else if complexity >= 0.52 {
-        4
-    } else {
-        3
-    };
-
-    if contains_any(&value, &["hotfix", "small", "quick"]) {
-        count = count.saturating_sub(1).max(3);
-    }
-    if contains_any(&value, &["rewrite", "multi-module", "platform-wide"]) {
-        count = (count + 1).min(5);
-    }
-
-    count.clamp(3, 5)
+Rules:
+- Generate 2-6 tasks. Fewer for simple objectives, more for complex ones.
+- Tier 2 tasks are for domain leaders who coordinate complex multi-file changes.
+- Tier 3 tasks are for specialists who make focused single-file changes.
+- Use tier 2 only for tasks that genuinely need coordination across multiple files.
+- Simple, focused changes should be tier 3.
+- targetFiles should be real paths from the file tree provided.
+- Order tasks by dependency (independent tasks first, dependent tasks last).
+- Each task objective must be specific and actionable, not vague."#
+        .to_string()
 }
 
-fn build_assignment_drafts(domain: &str, count: usize, complexity: f32) -> Vec<AssignmentDraft> {
-    let high_complexity = complexity >= 0.70;
-    let medium_complexity = complexity >= 0.45;
+fn build_file_tree_summary(files: &[String], max_entries: usize) -> String {
+    let mut summary = String::new();
+    for (i, file) in files.iter().enumerate() {
+        if i >= max_entries {
+            summary.push_str(&format!(
+                "... and {} more files\n",
+                files.len() - max_entries
+            ));
+            break;
+        }
+        summary.push_str(file);
+        summary.push('\n');
+    }
+    summary
+}
 
-    let templates: Vec<(u8, &str, &str)> = match domain {
-        "auth" => {
-            if high_complexity {
-                vec![
-                    (
-                        2,
-                        "auth",
-                        "Design auth boundary plan and coordinate critical interface refactor.",
-                    ),
-                    (
-                        2,
-                        "auth",
-                        "Coordinate token/session flow changes across services and adapters.",
-                    ),
-                    (
-                        3,
-                        "frontend",
-                        "Implement targeted auth UI consumer updates for guarded routes and hooks.",
-                    ),
-                    (
-                        3,
-                        "testing",
-                        "Add high-value auth regression tests for success/failure paths.",
-                    ),
-                    (
-                        2,
-                        "platform",
-                        "Stabilize rollout gates and backward compatibility for auth migration.",
-                    ),
-                ]
-            } else if medium_complexity {
-                vec![
-                    (
-                        2,
-                        "auth",
-                        "Coordinate focused auth service and contract cleanup for current objective.",
-                    ),
-                    (
-                        3,
-                        "auth",
-                        "Implement minimal auth persistence/session adapter adjustments.",
-                    ),
-                    (
-                        3,
-                        "testing",
-                        "Add regression checks for auth edge cases in modified flows.",
-                    ),
-                    (
-                        3,
-                        "frontend",
-                        "Patch auth-facing UI handlers to preserve behavior.",
-                    ),
-                ]
-            } else {
-                vec![
-                    (
-                        3,
-                        "auth",
-                        "Implement a focused auth fix with minimal blast radius.",
-                    ),
-                    (
-                        3,
-                        "testing",
-                        "Add targeted tests covering the changed auth behavior.",
-                    ),
-                    (
-                        3,
-                        "frontend",
-                        "Apply necessary UI-level auth consumer adjustments.",
-                    ),
-                ]
-            }
-        }
-        "database" => {
-            if high_complexity {
-                vec![
-                    (
-                        2,
-                        "database",
-                        "Coordinate schema/query refactor boundaries and migration sequencing.",
-                    ),
-                    (
-                        2,
-                        "database",
-                        "Lead repository and data access contract updates across modules.",
-                    ),
-                    (
-                        3,
-                        "api",
-                        "Implement API adapter updates required by new data contracts.",
-                    ),
-                    (
-                        3,
-                        "testing",
-                        "Add migration and regression checks for data integrity.",
-                    ),
-                    (
-                        2,
-                        "platform",
-                        "Prepare rollback and rollout guards for database refactor.",
-                    ),
-                ]
-            } else if medium_complexity {
-                vec![
-                    (
-                        2,
-                        "database",
-                        "Coordinate focused query/repository improvements in scoped area.",
-                    ),
-                    (
-                        3,
-                        "database",
-                        "Implement index or query path updates for targeted hotspots.",
-                    ),
-                    (
-                        3,
-                        "testing",
-                        "Add regression checks for updated query paths.",
-                    ),
-                    (
-                        3,
-                        "api",
-                        "Patch API surface impacted by persistence contract changes.",
-                    ),
-                ]
-            } else {
-                vec![
-                    (
-                        3,
-                        "database",
-                        "Implement a targeted low-risk persistence or query fix.",
-                    ),
-                    (
-                        3,
-                        "testing",
-                        "Add focused tests for the modified data behavior.",
-                    ),
-                    (
-                        3,
-                        "api",
-                        "Apply required adapter-level updates for consistency.",
-                    ),
-                ]
-            }
-        }
-        "frontend" => {
-            if high_complexity {
-                vec![
-                    (
-                        2,
-                        "frontend",
-                        "Coordinate component boundary refactor and shared state contract updates.",
-                    ),
-                    (
-                        2,
-                        "frontend",
-                        "Lead integration plan for UI modules impacted by this objective.",
-                    ),
-                    (
-                        3,
-                        "frontend",
-                        "Implement focused component-level improvements in highest-impact paths.",
-                    ),
-                    (
-                        3,
-                        "testing",
-                        "Add UI flow regressions covering loading/error/interaction states.",
-                    ),
-                    (
-                        3,
-                        "api",
-                        "Patch data-access adapters used by updated frontend surfaces.",
-                    ),
-                ]
-            } else if medium_complexity {
-                vec![
-                    (
-                        2,
-                        "frontend",
-                        "Coordinate medium-scope frontend update and align shared contracts.",
-                    ),
-                    (
-                        3,
-                        "frontend",
-                        "Implement core component/hook improvements for the target flow.",
-                    ),
-                    (
-                        3,
-                        "testing",
-                        "Add targeted UI tests for changed behavior and edge states.",
-                    ),
-                    (
-                        3,
-                        "frontend",
-                        "Polish integration points and eliminate regressions in dependent views.",
-                    ),
-                ]
-            } else {
-                vec![
-                    (
-                        3,
-                        "frontend",
-                        "Implement focused React/UI changes for the selected feature path.",
-                    ),
-                    (
-                        3,
-                        "frontend",
-                        "Apply a second focused fix for state/render consistency.",
-                    ),
-                    (
-                        3,
-                        "testing",
-                        "Add compact regression checks for the updated UI behavior.",
-                    ),
-                ]
-            }
-        }
-        _ => {
-            if high_complexity {
-                vec![
-                    (
-                        2,
-                        "platform",
-                        "Coordinate high-risk cross-module refactor boundaries and sequencing.",
-                    ),
-                    (
-                        2,
-                        "platform",
-                        "Lead integration updates across service and adapter seams.",
-                    ),
-                    (
-                        3,
-                        "platform",
-                        "Implement scoped core logic improvements for highest-priority module.",
-                    ),
-                    (
-                        3,
-                        "testing",
-                        "Add regression tests for critical success and failure scenarios.",
-                    ),
-                    (
-                        3,
-                        "platform",
-                        "Apply rollout hardening and safety checks around changed paths.",
-                    ),
-                ]
-            } else if medium_complexity {
-                vec![
-                    (
-                        2,
-                        "platform",
-                        "Coordinate focused domain logic cleanup and boundary improvements.",
-                    ),
-                    (
-                        3,
-                        "platform",
-                        "Implement adapter and contract updates required by the refactor.",
-                    ),
-                    (
-                        3,
-                        "testing",
-                        "Add targeted tests covering main and edge execution paths.",
-                    ),
-                    (
-                        3,
-                        "platform",
-                        "Patch follow-up consistency issues discovered during review.",
-                    ),
-                ]
-            } else {
-                vec![
-                    (
-                        3,
-                        "platform",
-                        "Implement a focused low-risk change in the target module.",
-                    ),
-                    (
-                        3,
-                        "platform",
-                        "Apply a companion fix to keep adjacent contracts stable.",
-                    ),
-                    (
-                        3,
-                        "testing",
-                        "Add compact regression tests for modified behavior.",
-                    ),
-                ]
-            }
-        }
-    };
+fn normalize_domain(domain: &str) -> String {
+    match domain.trim().to_ascii_lowercase().as_str() {
+        "frontend" | "ui" | "react" | "vue" | "angular" => "frontend".to_string(),
+        "backend" | "server" => "api".to_string(),
+        "api" | "rest" | "graphql" => "api".to_string(),
+        "database" | "db" | "sql" | "migration" => "database".to_string(),
+        "auth" | "authentication" | "authorization" | "security" => "auth".to_string(),
+        "testing" | "test" | "qa" | "e2e" | "unit" => "testing".to_string(),
+        _ => "platform".to_string(),
+    }
+}
 
-    templates
-        .into_iter()
-        .take(count.clamp(3, 5))
-        .map(|(tier, draft_domain, objective)| AssignmentDraft {
-            tier,
-            domain: draft_domain.to_string(),
-            objective: objective.to_string(),
-        })
-        .collect()
+fn strip_code_fences_orch(text: &str) -> &str {
+    let trimmed = text.trim();
+    if let Some(rest) = trimmed.strip_prefix("```json") {
+        if let Some(inner) = rest.strip_suffix("```") {
+            return inner.trim();
+        }
+    }
+    if let Some(rest) = trimmed.strip_prefix("```") {
+        if let Some(inner) = rest.strip_suffix("```") {
+            return inner.trim();
+        }
+    }
+    trimmed
+}
+
+fn parse_analysis_response(text: &str) -> Result<LlmAnalysisResponse, String> {
+    let cleaned = strip_code_fences_orch(text);
+    serde_json::from_str::<LlmAnalysisResponse>(cleaned)
+        .map_err(|error| format!("Failed to parse LLM analysis response: {error}\nRaw: {text}"))
+}
+
+fn parse_plan_response(text: &str) -> Result<LlmPlanResponse, String> {
+    let cleaned = strip_code_fences_orch(text);
+    serde_json::from_str::<LlmPlanResponse>(cleaned)
+        .map_err(|error| format!("Failed to parse LLM plan response: {error}\nRaw: {text}"))
 }
 
 fn contains_any(value: &str, patterns: &[&str]) -> bool {
@@ -1625,7 +1882,7 @@ mod tests {
         .await
         .expect("orchestration should succeed");
 
-        assert!((3..=5).contains(&result.assignments.len()));
+        assert!((2..=6).contains(&result.assignments.len()));
         assert_eq!(result.root_task.tier, 1);
         assert!(result
             .assignments

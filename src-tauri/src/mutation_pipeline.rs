@@ -347,23 +347,28 @@ async fn run_shadow_test(
     let shadow_root = create_shadow_dir()?;
     copy_project_for_shadow(&target_root, &shadow_root)?;
 
+    let patch_content = normalize_patch_line_endings(&mutation.diff_content);
+    validate_patch_format(&patch_content)?;
+
     let patch_path = shadow_root.join("aop_mutation.patch");
-    fs::write(&patch_path, &mutation.diff_content)
+    fs::write(&patch_path, &patch_content)
         .map_err(|error| format!("Failed to write patch in shadow dir: {error}"))?;
     let patch_value = patch_path.to_string_lossy().to_string();
+
+    normalize_file_line_endings_in_dir(&shadow_root, &mutation.file_path)?;
 
     run_command(&shadow_root, "git", &["init", "-q"], SHADOW_TIMEOUT).await?;
     run_command(
         &shadow_root,
         "git",
-        &["apply", "--check", patch_value.as_str()],
+        &["apply", "--check", "--whitespace=nowarn", patch_value.as_str()],
         SHADOW_TIMEOUT,
     )
     .await?;
     run_command(
         &shadow_root,
         "git",
-        &["apply", patch_value.as_str()],
+        &["apply", "--whitespace=nowarn", patch_value.as_str()],
         SHADOW_TIMEOUT,
     )
     .await?;
@@ -515,22 +520,25 @@ async fn apply_and_commit_mutation(
         ));
     }
 
+    let patch_content = normalize_patch_line_endings(&mutation.diff_content);
     let patch_path = target_root.join(format!(".aop_apply_{}.patch", mutation.id));
-    fs::write(&patch_path, &mutation.diff_content)
+    fs::write(&patch_path, &patch_content)
         .map_err(|error| format!("Failed to write apply patch file: {error}"))?;
     let patch_value = patch_path.to_string_lossy().to_string();
+
+    normalize_file_line_endings_in_dir(&target_root, &mutation.file_path)?;
 
     run_command(
         &target_root,
         "git",
-        &["apply", "--check", patch_value.as_str()],
+        &["apply", "--check", "--whitespace=nowarn", patch_value.as_str()],
         APPLY_TIMEOUT,
     )
     .await?;
     run_command(
         &target_root,
         "git",
-        &["apply", patch_value.as_str()],
+        &["apply", "--whitespace=nowarn", patch_value.as_str()],
         APPLY_TIMEOUT,
     )
     .await?;
@@ -734,6 +742,51 @@ async fn run_command_owned(
     }
 
     Ok(result)
+}
+
+fn normalize_patch_line_endings(patch: &str) -> String {
+    patch.replace("\r\n", "\n")
+}
+
+fn validate_patch_format(patch: &str) -> Result<(), String> {
+    if patch.trim().is_empty() {
+        return Err("Patch content is empty.".to_string());
+    }
+
+    let has_header = patch.contains("--- ") && patch.contains("+++ ");
+    if !has_header {
+        return Err("Patch is missing unified diff headers (--- / +++)".to_string());
+    }
+
+    let has_hunk = patch.contains("@@ ");
+    if !has_hunk {
+        return Err("Patch is missing hunk headers (@@)".to_string());
+    }
+
+    Ok(())
+}
+
+fn normalize_file_line_endings_in_dir(root: &Path, relative_file_path: &str) -> Result<(), String> {
+    let file_path = relative_file_path
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .fold(root.to_path_buf(), |acc, part| acc.join(part));
+
+    if !file_path.exists() {
+        return Ok(());
+    }
+
+    let content = fs::read_to_string(&file_path)
+        .map_err(|error| format!("Failed to read file for line ending normalization: {error}"))?;
+
+    if content.contains("\r\n") {
+        let normalized = content.replace("\r\n", "\n");
+        fs::write(&file_path, normalized).map_err(|error| {
+            format!("Failed to write normalized file: {error}")
+        })?;
+    }
+
+    Ok(())
 }
 
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
