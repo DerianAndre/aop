@@ -754,6 +754,20 @@ export function DashboardView() {
                     </span>
                   </div>
 
+                  {planExecutionResult.failedExecutions > 0 ? (
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium text-destructive">Errors</p>
+                      {planExecutionResult.message
+                        .split(' | ')
+                        .filter((note) => note.includes('failed'))
+                        .map((note, idx) => (
+                          <div className="rounded border border-destructive/20 bg-destructive/5 px-2 py-1.5" key={idx}>
+                            <p className="text-xs text-destructive whitespace-pre-wrap break-words">{note}</p>
+                          </div>
+                        ))}
+                    </div>
+                  ) : null}
+
                   {planExecutionResult.mutationSummaries.length > 0 ? (
                     <div className="space-y-1">
                       <p className="text-xs font-medium text-muted-foreground">Changed Files</p>
@@ -785,17 +799,17 @@ export function DashboardView() {
                         </div>
                       ))}
                     </div>
-                  ) : (
+                  ) : planExecutionResult.failedExecutions === 0 ? (
                     <p className="text-muted-foreground text-xs">
                       No mutations were generated. Check the activity log for details.
                     </p>
-                  )}
+                  ) : null}
 
                   <details className="text-xs">
                     <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
                       Raw execution log
                     </summary>
-                    <pre className="mt-1 whitespace-pre-wrap max-h-48 overflow-auto text-muted-foreground rounded bg-muted p-2 text-[11px]">
+                    <pre className="mt-1 whitespace-pre-wrap max-h-96 overflow-auto text-muted-foreground rounded bg-muted p-2 text-[11px]">
                       {planExecutionResult.message}
                     </pre>
                   </details>

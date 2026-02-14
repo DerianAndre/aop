@@ -1169,12 +1169,14 @@ Respond with JSON only:
   "suggestedApproach": "High-level approach you would recommend"
 }
 
-Rules:
-- Generate 2-5 focused questions about ambiguous requirements, constraints, or preferences
-- Questions should be answerable in 1-2 sentences
-- Focus on: scope boundaries, technology preferences, testing expectations, risk tolerance
-- If the objective is crystal clear and simple, you may return 0 questions
-- Your initialAnalysis should demonstrate understanding of the codebase context provided"#
+CRITICAL Rules:
+- For TRIVIAL objectives (edit one file, add a line, fix a typo, update README, simple config change): return 0 questions. Do NOT ask clarifying questions for obvious single-step tasks.
+- For SIMPLE objectives (1-2 file changes with clear intent): return 0-1 questions max.
+- For MODERATE to COMPLEX objectives: generate 2-5 focused questions about ambiguous requirements, constraints, or preferences.
+- Questions should be answerable in 1-2 sentences.
+- Focus on: scope boundaries, technology preferences, testing expectations, risk tolerance.
+- Your initialAnalysis should be concise and demonstrate understanding of what needs to be done.
+- Your suggestedApproach should match the complexity: trivial tasks need a one-sentence approach."#
         .to_string();
 
     let user_prompt = format!(
@@ -1480,6 +1482,15 @@ fn infer_primary_domain(objective: &str) -> String {
     let value = objective.to_lowercase();
     if contains_any(
         &value,
+        &[
+            "readme", "docs", "documentation", "changelog", "license",
+            "contributing", ".md", "markdown", "typo", "comment",
+        ],
+    ) {
+        return "docs".to_string();
+    }
+    if contains_any(
+        &value,
         &["auth", "login", "session", "oauth", "token", "credential"],
     ) {
         return "auth".to_string();
@@ -1492,6 +1503,12 @@ fn infer_primary_domain(objective: &str) -> String {
     }
     if contains_any(&value, &["api", "endpoint", "http", "route"]) {
         return "api".to_string();
+    }
+    if contains_any(&value, &["test", "spec", "coverage", "assert"]) {
+        return "testing".to_string();
+    }
+    if contains_any(&value, &["config", "env", "setting", "setup", ".toml", ".yaml", ".json"]) {
+        return "platform".to_string();
     }
     "platform".to_string()
 }
@@ -1550,6 +1567,13 @@ fn build_simple_fallback_drafts(domain: &str, objective: &str) -> Vec<Assignment
         &objective_lower,
         &["refactor", "rewrite", "migrate", "overhaul", "architecture"],
     );
+    let is_trivial = contains_any(
+        &objective_lower,
+        &[
+            "readme", "typo", "comment", "add line", "first line",
+            "changelog", "license", "rename", "fix typo",
+        ],
+    ) || domain == "docs";
 
     let mut drafts = Vec::new();
 
@@ -1569,12 +1593,15 @@ fn build_simple_fallback_drafts(domain: &str, objective: &str) -> Vec<Assignment
         target_files: Vec::new(),
     });
 
-    drafts.push(AssignmentDraft {
-        tier: 3,
-        domain: "testing".to_string(),
-        objective: format!("Add tests for: {objective}"),
-        target_files: Vec::new(),
-    });
+    // Only add testing task for non-trivial objectives
+    if !is_trivial {
+        drafts.push(AssignmentDraft {
+            tier: 3,
+            domain: "testing".to_string(),
+            objective: format!("Add tests for: {objective}"),
+            target_files: Vec::new(),
+        });
+    }
 
     if is_complex {
         drafts.push(AssignmentDraft {
@@ -1597,7 +1624,7 @@ Respond with JSON only:
   "tasks": [
     {
       "objective": "what this task should accomplish",
-      "domain": "frontend|backend|auth|database|api|testing|platform",
+      "domain": "frontend|backend|auth|database|api|testing|docs|platform",
       "tier": 2 or 3,
       "targetFiles": ["file/path1.ts", "file/path2.tsx"],
       "rationale": "why this task is needed"
@@ -1606,15 +1633,19 @@ Respond with JSON only:
   "riskAssessment": "overall risk analysis and mitigation notes"
 }
 
-Rules:
-- Generate 2-6 tasks. Fewer for simple objectives, more for complex ones.
-- Tier 2 tasks are for domain leaders who coordinate complex multi-file changes.
-- Tier 3 tasks are for specialists who make focused single-file changes.
-- Use tier 2 only for tasks that genuinely need coordination across multiple files.
-- Simple, focused changes should be tier 3.
-- targetFiles should be real paths from the file tree provided.
+CRITICAL Rules:
+- Generate 1-6 tasks. Match task count to objective complexity:
+  * TRIVIAL objectives (edit one file, add one line, fix a typo, update a README): generate exactly 1 task. Do NOT create testing or validation tasks for trivial edits.
+  * SIMPLE objectives (change 1-2 files, small feature): 1-2 tasks.
+  * MODERATE objectives (3-5 files, new feature): 2-4 tasks.
+  * COMPLEX objectives (6+ files, refactor, migration): 3-6 tasks.
+- Do NOT create a separate "testing" task unless the objective explicitly mentions tests or the change is complex enough to warrant them.
+- Tier 2 tasks are for domain leaders who coordinate complex multi-file changes. Use tier 2 ONLY for tasks that genuinely need coordination across 3+ files.
+- Tier 3 tasks are for specialists who make focused single-file changes. Most tasks should be tier 3.
+- targetFiles MUST be real paths from the file tree provided. ONLY include files that are directly relevant to the objective. Never include infrastructure, pipeline, or framework files unless the objective explicitly targets them.
 - Order tasks by dependency (independent tasks first, dependent tasks last).
-- Each task objective must be specific and actionable, not vague."#
+- Each task objective must be specific and actionable, not vague.
+- For documentation objectives (README, docs, config files): use domain "docs" and generate exactly 1 tier 3 task."#
         .to_string()
 }
 
@@ -1642,6 +1673,7 @@ fn normalize_domain(domain: &str) -> String {
         "database" | "db" | "sql" | "migration" => "database".to_string(),
         "auth" | "authentication" | "authorization" | "security" => "auth".to_string(),
         "testing" | "test" | "qa" | "e2e" | "unit" => "testing".to_string(),
+        "docs" | "documentation" | "readme" | "markdown" => "docs".to_string(),
         _ => "platform".to_string(),
     }
 }
