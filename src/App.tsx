@@ -1,3 +1,4 @@
+// AOP(security_analyst): Implement core changes: Add a TypeScript utility function that formats token counts with K/M suffixes (e.g., 1500 → "1.5
 import { useEffect } from 'react'
 import { AppLayout } from '@/layouts/AppLayout'
 import { useAopStore } from '@/store/aop-store'

@@ -1581,8 +1581,10 @@ fn contains_any(value: &str, patterns: &[&str]) -> bool {
 
 fn normalize_project_root(target_project: &str) -> Result<PathBuf, String> {
     let root = PathBuf::from(target_project.trim());
-    let normalized = fs::canonicalize(root)
-        .map_err(|error| format!("Unable to resolve target project path: {error}"))?;
+    let normalized = strip_unc_prefix(
+        fs::canonicalize(root)
+            .map_err(|error| format!("Unable to resolve target project path: {error}"))?,
+    );
 
     if !normalized.is_dir() {
         return Err(format!(
@@ -1592,6 +1594,17 @@ fn normalize_project_root(target_project: &str) -> Result<PathBuf, String> {
     }
 
     Ok(normalized)
+}
+
+/// Strip the Windows extended-length path prefix (`\\?\`) that `fs::canonicalize` adds.
+/// Git and most external tools cannot handle UNC paths.
+fn strip_unc_prefix(path: PathBuf) -> PathBuf {
+    let s = path.to_string_lossy();
+    if let Some(stripped) = s.strip_prefix(r"\\?\") {
+        PathBuf::from(stripped)
+    } else {
+        path
+    }
 }
 
 fn collect_source_files(root: &Path, limit: usize) -> Result<Vec<String>, String> {

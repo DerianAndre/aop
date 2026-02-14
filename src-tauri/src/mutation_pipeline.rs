@@ -584,8 +584,10 @@ fn checksum_for_target_file(
 
 fn normalize_target_root(target_project: &str) -> Result<PathBuf, String> {
     let root = PathBuf::from(target_project.trim());
-    let normalized = fs::canonicalize(root)
-        .map_err(|error| format!("Unable to resolve target project path: {error}"))?;
+    let normalized = strip_unc_prefix(
+        fs::canonicalize(root)
+            .map_err(|error| format!("Unable to resolve target project path: {error}"))?,
+    );
     if !normalized.is_dir() {
         return Err(format!(
             "Target project path '{}' is not a directory.",
@@ -594,6 +596,17 @@ fn normalize_target_root(target_project: &str) -> Result<PathBuf, String> {
     }
 
     Ok(normalized)
+}
+
+/// Strip the Windows extended-length path prefix (`\\?\`) that `fs::canonicalize` adds.
+/// Git and most external tools cannot handle UNC paths.
+fn strip_unc_prefix(path: PathBuf) -> PathBuf {
+    let s = path.to_string_lossy();
+    if let Some(stripped) = s.strip_prefix(r"\\?\") {
+        PathBuf::from(stripped)
+    } else {
+        path
+    }
 }
 
 fn resolve_target_file(project_root: &Path, relative_file_path: &str) -> Result<PathBuf, String> {
@@ -608,11 +621,14 @@ fn resolve_target_file(project_root: &Path, relative_file_path: &str) -> Result<
         .split('/')
         .filter(|part| !part.is_empty())
         .fold(project_root.to_path_buf(), |acc, part| acc.join(part));
-    let canonicalized = fs::canonicalize(&path)
-        .map_err(|error| format!("Failed to resolve mutation file '{}': {error}", path.display()))?;
-    // Canonicalize project_root too so both use the same format (UNC on Windows)
-    let canonical_root = fs::canonicalize(project_root)
-        .unwrap_or_else(|_| project_root.to_path_buf());
+    let canonicalized = strip_unc_prefix(
+        fs::canonicalize(&path)
+            .map_err(|error| format!("Failed to resolve mutation file '{}': {error}", path.display()))?,
+    );
+    // Canonicalize project_root too so both use the same format
+    let canonical_root = strip_unc_prefix(
+        fs::canonicalize(project_root).unwrap_or_else(|_| project_root.to_path_buf()),
+    );
     if !canonicalized.starts_with(&canonical_root) {
         return Err("mutation file path escapes target project root".to_string());
     }
@@ -648,6 +664,10 @@ fn copy_project_for_shadow(source_root: &Path, destination_root: &Path) -> Resul
             let entry_path = entry.path();
             let name = entry.file_name().to_string_lossy().to_string();
 
+            if is_windows_reserved_name(&name) {
+                continue;
+            }
+
             if file_type.is_dir() {
                 if should_skip_shadow_dir(&name) {
                     continue;
@@ -682,6 +702,23 @@ fn copy_project_for_shadow(source_root: &Path, destination_root: &Path) -> Resul
     }
 
     Ok(())
+}
+
+/// Windows reserved device names that cannot be used as file names.
+/// Trying to copy these causes OS error 87 ("The parameter is incorrect").
+fn is_windows_reserved_name(name: &str) -> bool {
+    let stem = Path::new(name)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(name);
+    matches!(
+        stem.to_ascii_uppercase().as_str(),
+        "CON" | "PRN" | "AUX" | "NUL"
+            | "COM0" | "COM1" | "COM2" | "COM3" | "COM4"
+            | "COM5" | "COM6" | "COM7" | "COM8" | "COM9"
+            | "LPT0" | "LPT1" | "LPT2" | "LPT3" | "LPT4"
+            | "LPT5" | "LPT6" | "LPT7" | "LPT8" | "LPT9"
+    )
 }
 
 fn should_skip_shadow_dir(name: &str) -> bool {
