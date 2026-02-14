@@ -326,6 +326,7 @@ export function CommandCenterView() {
             <div className="h-full">
               <PrimaryPanel
                 phase={phase}
+                rootTaskId={ccRootTaskId}
                 tasks={rootTasks}
                 mutations={mutationList}
                 orchestrationResult={ccOrchestrationResult}
@@ -342,6 +343,7 @@ export function CommandCenterView() {
               <ResizablePanel defaultSize={60} minSize={30}>
                 <PrimaryPanel
                   phase={phase}
+                  rootTaskId={ccRootTaskId}
                   tasks={rootTasks}
                   mutations={mutationList}
                   orchestrationResult={ccOrchestrationResult}

@@ -6,21 +6,22 @@ import {
   Crosshair,
   FileCode,
   GitPullRequest,
-  Loader2,
   XCircle,
 } from 'lucide-react'
 
+import OrchestrationProgress from '@/components/OrchestrationProgress'
+import OrchestrationSummary from '@/components/OrchestrationSummary'
 import TaskGraph from '@/components/TaskGraph'
 import PlanReviewCards from '@/components/command-center/PlanReviewCards'
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { Skeleton } from '@/components/ui/skeleton'
 import { useAopStore } from '@/store/aop-store'
 import type { CcPhase } from '@/store/types'
 import type { MutationRecord, OrchestrationResult, TaskRecord } from '@/types'
 
 interface PrimaryPanelProps {
   phase: CcPhase
+  rootTaskId: string | null
   tasks: TaskRecord[]
   mutations: MutationRecord[]
   orchestrationResult: OrchestrationResult | null
@@ -61,20 +62,23 @@ function EmptyState() {
   )
 }
 
-function PlanningState() {
+function PlanningState({ rootTaskId }: { rootTaskId: string | null }) {
+  if (rootTaskId) {
+    return (
+      <div className="h-full overflow-auto p-4">
+        <OrchestrationProgress taskId={rootTaskId} flow="quick-decompose" />
+      </div>
+    )
+  }
+
   return (
     <div className="flex flex-col items-center justify-center h-full gap-4 p-8">
-      <Loader2 className="size-8 text-primary animate-spin" />
+      <div className="size-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
       <div className="space-y-1 text-center">
         <h3 className="text-sm font-medium">Analyzing Objective</h3>
         <p className="text-xs text-muted-foreground">
-          Estimating complexity, allocating budget, scanning project files...
+          Initializing orchestration...
         </p>
-      </div>
-      <div className="space-y-2 w-48">
-        <Skeleton className="h-2 w-full" />
-        <Skeleton className="h-2 w-3/4" />
-        <Skeleton className="h-2 w-1/2" />
       </div>
     </div>
   )
@@ -142,48 +146,72 @@ function MutationQueue({
   )
 }
 
-function CompletedState({ tasks }: { tasks: TaskRecord[] }) {
+function CompletedState({ tasks, orchestrationResult }: { tasks: TaskRecord[]; orchestrationResult: OrchestrationResult | null }) {
   const completed = tasks.filter((t) => t.status === 'completed').length
   const failed = tasks.filter((t) => t.status === 'failed').length
   const totalTokens = tasks.reduce((sum, t) => sum + t.tokenUsage, 0)
 
   return (
-    <div className="flex flex-col items-center justify-center h-full gap-4 p-8">
-      <CheckCircle2 className="size-10 text-green-500" />
-      <div className="space-y-1 text-center">
-        <h3 className="text-sm font-medium">Orchestration Complete</h3>
-        <p className="text-xs text-muted-foreground">
-          {completed} tasks completed, {failed} failed, {totalTokens.toLocaleString()} tokens used
-        </p>
+    <ScrollArea className="h-full">
+      <div className="space-y-4 p-4">
+        <div className="flex items-center gap-3">
+          <CheckCircle2 className="size-6 text-green-500 shrink-0" />
+          <div>
+            <h3 className="text-sm font-medium">Orchestration Complete</h3>
+            <p className="text-xs text-muted-foreground">
+              {completed} completed, {failed} failed, {totalTokens.toLocaleString()} tokens used
+            </p>
+          </div>
+        </div>
+        {orchestrationResult ? (
+          <OrchestrationSummary result={orchestrationResult} />
+        ) : null}
       </div>
-    </div>
+    </ScrollArea>
   )
 }
 
-function FailedState({ tasks }: { tasks: TaskRecord[] }) {
+function FailedState({ tasks, orchestrationResult }: { tasks: TaskRecord[]; orchestrationResult: OrchestrationResult | null }) {
   const completed = tasks.filter((t) => t.status === 'completed').length
   const failed = tasks.filter((t) => t.status === 'failed').length
   const totalTokens = tasks.reduce((sum, t) => sum + t.tokenUsage, 0)
-  const firstError = tasks.find((t) => t.status === 'failed')?.errorMessage
+  const failedTasks = tasks.filter((t) => t.status === 'failed')
 
   return (
-    <div className="flex flex-col items-center justify-center h-full gap-4 p-8">
-      <XCircle className="size-10 text-destructive" />
-      <div className="space-y-1 text-center">
-        <h3 className="text-sm font-medium">Orchestration Failed</h3>
-        <p className="text-xs text-muted-foreground">
-          {completed} completed, {failed} failed, {totalTokens.toLocaleString()} tokens used
-        </p>
-        {firstError ? (
-          <p className="text-xs text-destructive/80 max-w-md mt-2">{firstError}</p>
+    <ScrollArea className="h-full">
+      <div className="space-y-4 p-4">
+        <div className="flex items-center gap-3">
+          <XCircle className="size-6 text-destructive shrink-0" />
+          <div>
+            <h3 className="text-sm font-medium">Orchestration Failed</h3>
+            <p className="text-xs text-muted-foreground">
+              {completed} completed, {failed} failed, {totalTokens.toLocaleString()} tokens used
+            </p>
+          </div>
+        </div>
+        {failedTasks.length > 0 ? (
+          <div className="space-y-1.5">
+            {failedTasks.map((t) => (
+              <div key={t.id} className="rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2">
+                <p className="text-xs font-medium">T{t.tier} · {t.domain}</p>
+                {t.errorMessage ? (
+                  <p className="text-[11px] text-destructive/80 mt-0.5 whitespace-pre-wrap break-words">{t.errorMessage}</p>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {orchestrationResult ? (
+          <OrchestrationSummary result={orchestrationResult} />
         ) : null}
       </div>
-    </div>
+    </ScrollArea>
   )
 }
 
 export default function PrimaryPanel({
   phase,
+  rootTaskId,
   tasks,
   mutations,
   orchestrationResult,
@@ -206,7 +234,7 @@ export default function PrimaryPanel({
   )
 
   if (phase === 'empty') return <EmptyState />
-  if (phase === 'planning') return <PlanningState />
+  if (phase === 'planning') return <PlanningState rootTaskId={rootTaskId} />
 
   if (phase === 'ready' && orchestrationResult) {
     return (
@@ -241,11 +269,11 @@ export default function PrimaryPanel({
   }
 
   if (phase === 'completed') {
-    return <CompletedState tasks={tasks} />
+    return <CompletedState tasks={tasks} orchestrationResult={orchestrationResult} />
   }
 
   if (phase === 'failed') {
-    return <FailedState tasks={tasks} />
+    return <FailedState tasks={tasks} orchestrationResult={orchestrationResult} />
   }
 
   return <EmptyState />

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 
+import OrchestrationProgress from '@/components/OrchestrationProgress'
+import OrchestrationSummary from '@/components/OrchestrationSummary'
 import TaskActivityFeed from '@/components/TaskActivityFeed'
 import TaskBudgetPanel from '@/components/TaskBudgetPanel'
 import { Button } from '@/components/ui/button'
@@ -527,37 +529,29 @@ export function DashboardView() {
           </form>
 
           {isOrchestrating ? (
-            <div className="space-y-3">
+            monitoredTaskId ? (
+              <OrchestrationProgress taskId={monitoredTaskId} flow="quick-decompose" />
+            ) : (
               <div className="rounded-md border border-blue-500/30 bg-blue-500/5 p-4">
                 <div className="flex items-center gap-2">
                   <div className="size-2 animate-pulse rounded-full bg-blue-500" />
                   <h4 className="text-sm font-semibold">Quick Decompose in progress...</h4>
                 </div>
-                <p className="text-muted-foreground text-xs mt-1">
-                  Selecting Tier 1 model, collecting source files, calling LLM to generate task plan, creating subtask assignments.
-                </p>
               </div>
-              {monitoredTaskId ? (
-                <TaskActivityFeed taskId={monitoredTaskId} title="Live Orchestration Activity" pollMs={1000} />
-              ) : null}
-            </div>
+            )
           ) : null}
 
           {isAnalyzing ? (
-            <div className="space-y-3">
+            monitoredTaskId ? (
+              <OrchestrationProgress taskId={monitoredTaskId} flow="analyze" />
+            ) : (
               <div className="rounded-md border border-blue-500/30 bg-blue-500/5 p-4">
                 <div className="flex items-center gap-2">
                   <div className="size-2 animate-pulse rounded-full bg-blue-500" />
                   <h4 className="text-sm font-semibold">Analyzing Objective...</h4>
                 </div>
-                <p className="text-muted-foreground text-xs">
-                  Collecting source files, selecting Tier 1 model, calling LLM for analysis and clarifying questions.
-                </p>
               </div>
-              {monitoredTaskId ? (
-                <TaskActivityFeed taskId={monitoredTaskId} title="Live Analysis Activity" pollMs={1000} />
-              ) : null}
-            </div>
+            )
           ) : null}
 
           {analysisResult && !generatedPlan ? (
@@ -618,33 +612,23 @@ export function DashboardView() {
           ) : null}
 
           {isGeneratingPlan ? (
-            <div className="space-y-3 rounded-md border border-blue-500/30 bg-blue-500/5 p-4">
-              <div className="flex items-center gap-2">
-                <div className="size-2 animate-pulse rounded-full bg-blue-500" />
-                <h4 className="text-sm font-semibold">Generating Plan...</h4>
+            monitoredTaskId ? (
+              <OrchestrationProgress taskId={monitoredTaskId} flow="generate-plan" />
+            ) : (
+              <div className="rounded-md border border-blue-500/30 bg-blue-500/5 p-4">
+                <div className="flex items-center gap-2">
+                  <div className="size-2 animate-pulse rounded-full bg-blue-500" />
+                  <h4 className="text-sm font-semibold">Generating Plan...</h4>
+                </div>
               </div>
-              <p className="text-muted-foreground text-xs">
-                LLM is processing your answers and generating a detailed task plan with assignments, budgets, and risk factors.
-              </p>
-            </div>
-          ) : null}
-
-          {generatedPlan?.riskAssessment ? (
-            <div className="rounded-md border border-yellow-500/30 bg-yellow-500/5 p-3">
-              <h4 className="text-sm font-semibold">Risk Assessment</h4>
-              <p className="text-muted-foreground text-sm">{generatedPlan.riskAssessment}</p>
-            </div>
+            )
           ) : null}
 
           {orchestrationResult ? (
-            <div className="space-y-3 rounded-md border p-4">
-              <p className="text-muted-foreground text-sm">
-                Root task: <strong>{orchestrationResult.rootTask.id}</strong> | subtasks:{' '}
-                <strong>{orchestrationResult.assignments.length}</strong> | distributed budget:{' '}
-                <strong>{orchestrationResult.distributedBudget}</strong>
-              </p>
+            <div className="space-y-3">
+              <OrchestrationSummary result={orchestrationResult} generatedPlan={generatedPlan} />
 
-              <div className="space-y-2">
+              <div className="space-y-2 rounded-md border p-4">
                 {orchestrationResult.assignments.map((assignment) => (
                   <div className="rounded-md border p-3" key={assignment.taskId}>
                     <div className="flex items-center justify-between gap-3">
@@ -711,20 +695,16 @@ export function DashboardView() {
               </div>
 
               {isApprovingPlan ? (
-                <div className="space-y-3">
+                monitoredTaskId ? (
+                  <OrchestrationProgress taskId={monitoredTaskId} flow="approve-execute" />
+                ) : (
                   <div className="rounded-md border border-blue-500/30 bg-blue-500/5 p-3">
                     <div className="flex items-center gap-2">
                       <div className="size-2 animate-pulse rounded-full bg-blue-500" />
                       <h4 className="text-sm font-semibold">Executing Plan...</h4>
                     </div>
-                    <p className="text-muted-foreground text-xs mt-1">
-                      Spawning Tier 2 domain leaders and Tier 3 specialists. Calling LLM for code generation, computing diffs, running shadow tests.
-                    </p>
                   </div>
-                  {monitoredTaskId ? (
-                    <TaskActivityFeed taskId={monitoredTaskId} title="Live Execution Log" pollMs={800} />
-                  ) : null}
-                </div>
+                )
               ) : null}
 
               {planExecutionResult ? (
