@@ -709,22 +709,35 @@ export function DashboardView() {
               </div>
 
               {isApprovingPlan ? (
-                <div className="rounded-md border border-blue-500/30 bg-blue-500/5 p-3">
-                  <div className="flex items-center gap-2">
-                    <div className="size-2 animate-pulse rounded-full bg-blue-500" />
-                    <h4 className="text-sm font-semibold">Executing Plan...</h4>
+                <div className="space-y-3">
+                  <div className="rounded-md border border-blue-500/30 bg-blue-500/5 p-3">
+                    <div className="flex items-center gap-2">
+                      <div className="size-2 animate-pulse rounded-full bg-blue-500" />
+                      <h4 className="text-sm font-semibold">Executing Plan...</h4>
+                    </div>
+                    <p className="text-muted-foreground text-xs mt-1">
+                      Spawning Tier 2 domain leaders and Tier 3 specialists. Calling LLM for code generation, computing diffs, running shadow tests.
+                    </p>
                   </div>
-                  <p className="text-muted-foreground text-xs mt-1">
-                    Spawning Tier 2 domain leaders and Tier 3 specialists. Generating mutations, running shadow tests, applying patches.
-                  </p>
+                  {monitoredTaskId ? (
+                    <TaskActivityFeed taskId={monitoredTaskId} title="Live Execution Log" pollMs={800} />
+                  ) : null}
                 </div>
               ) : null}
 
               {planExecutionResult ? (
                 <div className={`rounded-md border p-3 ${planExecutionResult.failedExecutions > 0 && planExecutionResult.appliedMutations === 0 ? 'border-destructive/30 bg-destructive/5' : planExecutionResult.failedExecutions > 0 ? 'border-yellow-500/30 bg-yellow-500/5' : 'border-green-500/30 bg-green-500/5'}`}>
-                  <p className="text-sm whitespace-pre-wrap">
-                    {planExecutionResult.message}
+                  <p className="text-sm font-semibold mb-1">
+                    {planExecutionResult.appliedMutations > 0
+                      ? `${planExecutionResult.appliedMutations} mutation(s) applied`
+                      : 'No mutations applied'}
+                    {planExecutionResult.failedExecutions > 0
+                      ? ` · ${planExecutionResult.failedExecutions} failed`
+                      : ''}
                   </p>
+                  <pre className="text-xs whitespace-pre-wrap max-h-48 overflow-auto text-muted-foreground">
+                    {planExecutionResult.message}
+                  </pre>
                 </div>
               ) : null}
 

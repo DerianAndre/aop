@@ -388,7 +388,13 @@ pub async fn execute_domain_task(
                     &format!("tier3_{}", persona),
                     "specialist_execution_failed",
                     &specialist_task_id,
-                    &error,
+                    &format!(
+                        "model={}/{} file={} error: {}",
+                        specialist_model.provider,
+                        specialist_model.model_id,
+                        target_file,
+                        error
+                    ),
                 )
                 .await?;
             }

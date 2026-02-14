@@ -130,16 +130,34 @@ fn call_claude_code(request: &AdapterRequest) -> Result<AdapterResponse, String>
         .arg("--model")
         .arg(request.model_id.trim())
         .arg("--system-prompt")
-        .arg(request.system_prompt.trim())
-        .arg(request.user_prompt.trim());
+        .arg(request.system_prompt.trim());
 
     if let Some(max_budget) = read_optional_max_budget() {
         command.arg("--max-budget-usd").arg(max_budget);
     }
 
-    let output = command
-        .output()
+    // Pipe the user prompt via stdin to avoid Windows command-line length limits.
+    // CreateProcess has a ~32K char limit; the user prompt can include full file
+    // content that easily exceeds this.
+    command
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    let mut child = command
+        .spawn()
         .map_err(|error| format!("Failed to execute Claude Code CLI: {error}"))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write;
+        stdin
+            .write_all(request.user_prompt.as_bytes())
+            .map_err(|error| format!("Failed to write prompt to Claude CLI stdin: {error}"))?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("Failed to wait for Claude Code CLI: {error}"))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

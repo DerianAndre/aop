@@ -4,50 +4,50 @@
   "tiers": {
     "1": [
       {
-        "provider": "openai",
-        "modelId": "gpt-5.3"
+        "provider": "claude_code",
+        "modelId": "opus"
       },
       {
-        "provider": "claude_code",
-        "modelId": "opus-4-6"
+        "provider": "openai",
+        "modelId": "gpt-5.3"
       }
     ],
     "2": [
       {
-        "provider": "openai",
-        "modelId": "gpt-5.2"
+        "provider": "claude_code",
+        "modelId": "sonnet"
       },
       {
-        "provider": "claude_code",
-        "modelId": "sonnet-4-5"
+        "provider": "openai",
+        "modelId": "gpt-5.2"
       }
     ],
     "3": [
       {
-        "provider": "openai",
-        "modelId": "gpt-5-nano"
+        "provider": "claude_code",
+        "modelId": "haiku"
       },
       {
-        "provider": "claude_code",
-        "modelId": "haiku-4-5"
+        "provider": "openai",
+        "modelId": "gpt-5-nano"
       }
     ]
   },
   "personaOverrides": {
     "security_analyst": [
       {
-        "provider": "openai",
-        "modelId": "o3"
+        "provider": "claude_code",
+        "modelId": "opus"
       },
       {
-        "provider": "claude_code",
-        "modelId": "opus-4-6"
+        "provider": "openai",
+        "modelId": "o3"
       }
     ],
     "revision_specialist": [
       {
         "provider": "claude_code",
-        "modelId": "sonnet-4-5"
+        "modelId": "sonnet"
       }
     ]
   }

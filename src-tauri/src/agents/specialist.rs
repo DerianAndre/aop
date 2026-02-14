@@ -319,32 +319,43 @@ fn try_remote_model_generation(
                         &modified_normalized,
                     );
                     if diff.trim().is_empty() {
-                        let fallback = build_fallback_diff(
-                            file_path,
-                            target_file_content,
-                            &task.persona,
-                            &task.objective,
-                        );
-                        (fallback, 0.45)
-                    } else {
-                        let confidence =
-                            estimate_llm_confidence(task, &original_normalized, &modified_normalized);
-                        (diff, confidence)
+                        return Err(format!(
+                            "LLM returned modifiedContent for {} but computed diff was empty",
+                            file_path
+                        ));
                     }
+                    let confidence =
+                        estimate_llm_confidence(task, &original_normalized, &modified_normalized);
+                    (diff, confidence)
                 }
                 (None, Some(ref modified)) => {
                     let modified_normalized = modified.replace("\r\n", "\n");
                     let diff = compute_unified_diff(file_path, "", &modified_normalized);
                     (diff, 0.60)
                 }
-                _ => {
-                    let fallback = build_fallback_diff(
-                        file_path,
-                        target_file_content,
-                        &task.persona,
-                        &task.objective,
-                    );
-                    (fallback, 0.42)
+                (Some(_), Some(_)) => {
+                    // LLM returned content identical to original — no-op change
+                    return Err(format!(
+                        "LLM returned unchanged content for {} — no modifications produced",
+                        file_path
+                    ));
+                }
+                (Some(_), None) => {
+                    // LLM was called but returned null modifiedContent
+                    let reason = parsed
+                        .as_ref()
+                        .and_then(|p| p.intent_description.as_deref())
+                        .unwrap_or("no reason provided");
+                    return Err(format!(
+                        "LLM declined to modify {}: {}",
+                        file_path, reason
+                    ));
+                }
+                (None, None) => {
+                    return Err(format!(
+                        "LLM returned no modifiedContent and no file content available for {}",
+                        file_path
+                    ));
                 }
             };
 
@@ -362,24 +373,12 @@ fn try_remote_model_generation(
             }))
         }
         Err(error) => {
-            if strict_model_adapter_enabled() {
-                return Err(format!("Model adapter execution failed: {error}"));
-            }
-            Ok(None)
+            // Always propagate LLM errors. Silently falling back to a
+            // comment-insertion diff hides the real problem and produces
+            // mutations that look "successful" but contain no useful changes.
+            Err(format!("LLM adapter failed: {error}"))
         }
     }
-}
-
-fn strict_model_adapter_enabled() -> bool {
-    std::env::var("AOP_MODEL_ADAPTER_STRICT")
-        .ok()
-        .map(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
-        .unwrap_or(false)
 }
 
 fn remote_model_adapter_enabled() -> bool {
@@ -583,11 +582,7 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
-
     use super::*;
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn make_task() -> SpecialistTask {
         SpecialistTask {
@@ -638,15 +633,6 @@ mod tests {
 
         let distance = semantic_distance(&proposal_a, &proposal_b);
         assert!((0.0..=1.0).contains(&distance));
-    }
-
-    #[test]
-    fn strict_model_adapter_flag_is_respected() {
-        let _guard = ENV_LOCK.lock().expect("env lock should be acquired");
-        std::env::set_var("AOP_MODEL_ADAPTER_STRICT", "true");
-        assert!(strict_model_adapter_enabled());
-        std::env::remove_var("AOP_MODEL_ADAPTER_STRICT");
-        assert!(!strict_model_adapter_enabled());
     }
 
     #[test]
