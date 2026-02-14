@@ -59,6 +59,10 @@ pub async fn request_mutation_revision(
             token_budget: revision_budget,
             risk_factor: parent_task.risk_factor,
             status: TaskStatus::Pending,
+            target_files: Some(
+                serde_json::to_string(&vec![base_mutation.file_path.clone()])
+                    .unwrap_or_default(),
+            ),
         },
     )
     .await?;

@@ -341,20 +341,23 @@ fn try_remote_model_generation(
                     ));
                 }
                 (Some(_), None) => {
-                    // LLM was called but returned null modifiedContent
+                    // LLM was called but returned null modifiedContent.
+                    // Include raw response excerpt for debugging.
                     let reason = parsed
                         .as_ref()
                         .and_then(|p| p.intent_description.as_deref())
                         .unwrap_or("no reason provided");
+                    let raw_excerpt: String = response.text.chars().take(300).collect();
                     return Err(format!(
-                        "LLM declined to modify {}: {}",
-                        file_path, reason
+                        "LLM returned no modifiedContent for {}: {}. Raw response (first 300 chars): {}",
+                        file_path, reason, raw_excerpt
                     ));
                 }
                 (None, None) => {
+                    let raw_excerpt: String = response.text.chars().take(300).collect();
                     return Err(format!(
-                        "LLM returned no modifiedContent and no file content available for {}",
-                        file_path
+                        "LLM returned no modifiedContent and no file content available for {}. Raw response (first 300 chars): {}",
+                        file_path, raw_excerpt
                     ));
                 }
             };
@@ -468,12 +471,41 @@ fn parse_specialist_model_output(raw: &str) -> Option<SpecialistModelOutput> {
         return None;
     }
 
-    let cleaned = strip_code_fences(trimmed);
-
-    if let Ok(parsed) = serde_json::from_str::<SpecialistModelOutput>(&cleaned) {
+    // Try direct parse first (clean JSON)
+    if let Some(parsed) = try_parse_json(trimmed) {
         return Some(parsed);
     }
-    if let Ok(value) = serde_json::from_str::<Value>(&cleaned) {
+
+    // Try stripping code fences at the start
+    let cleaned = strip_code_fences(trimmed);
+    if cleaned != trimmed {
+        if let Some(parsed) = try_parse_json(&cleaned) {
+            return Some(parsed);
+        }
+    }
+
+    // Try extracting JSON from mixed text (LLM often adds explanation before/after)
+    if let Some(json_str) = extract_json_object(trimmed) {
+        if let Some(parsed) = try_parse_json(&json_str) {
+            return Some(parsed);
+        }
+    }
+
+    // Try extracting from code fences anywhere in the text
+    if let Some(fenced) = extract_fenced_content(trimmed) {
+        if let Some(parsed) = try_parse_json(&fenced) {
+            return Some(parsed);
+        }
+    }
+
+    None
+}
+
+fn try_parse_json(text: &str) -> Option<SpecialistModelOutput> {
+    if let Ok(parsed) = serde_json::from_str::<SpecialistModelOutput>(text) {
+        return Some(parsed);
+    }
+    if let Ok(value) = serde_json::from_str::<Value>(text) {
         if let Some(object) = value.as_object() {
             let payload = SpecialistModelOutput {
                 intent_description: object
@@ -498,6 +530,45 @@ fn parse_specialist_model_output(raw: &str) -> Option<SpecialistModelOutput> {
         }
     }
     None
+}
+
+/// Find the first `{...}` JSON object in the text using brace counting.
+fn extract_json_object(text: &str) -> Option<String> {
+    let start = text.find('{')?;
+    let mut depth = 0_i32;
+    let mut in_string = false;
+    let mut escape_next = false;
+
+    for (i, ch) in text[start..].char_indices() {
+        if escape_next {
+            escape_next = false;
+            continue;
+        }
+        match ch {
+            '\\' if in_string => escape_next = true,
+            '"' => in_string = !in_string,
+            '{' if !in_string => depth += 1,
+            '}' if !in_string => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(text[start..start + i + 1].to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Extract content from code fences anywhere in the text (not just at start).
+fn extract_fenced_content(text: &str) -> Option<String> {
+    let fence_start = text.find("```")?;
+    let after_fence = &text[fence_start + 3..];
+    // Skip the language tag (e.g., "json\n")
+    let content_start = after_fence.find('\n').map(|pos| pos + 1)?;
+    let inner = &after_fence[content_start..];
+    let fence_end = inner.find("```")?;
+    Some(inner[..fence_end].trim().to_string())
 }
 
 /// Compute a proper unified diff using the `similar` crate.

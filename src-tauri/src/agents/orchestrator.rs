@@ -226,6 +226,7 @@ pub async fn orchestrate_and_persist(
             token_budget: overhead_budget.max(1) as i64,
             risk_factor: 0.0,
             status: TaskStatus::Pending,
+            target_files: None,
         },
     )
     .await?;
@@ -317,6 +318,11 @@ pub async fn orchestrate_and_persist(
         }
 
         let (relevant_files, risk_factor, constraints) = &per_draft_context[idx];
+        let target_files_json = if relevant_files.is_empty() {
+            None
+        } else {
+            Some(serde_json::to_string(relevant_files).unwrap_or_default())
+        };
         let created = tasks::create_task_record(
             pool,
             CreateTaskRecordInput {
@@ -327,6 +333,7 @@ pub async fn orchestrate_and_persist(
                 token_budget: budgets[idx].max(1) as i64,
                 risk_factor: f64::from(*risk_factor),
                 status: TaskStatus::Paused,
+                target_files: target_files_json,
             },
         )
         .await?;
@@ -709,16 +716,27 @@ async fn execute_planned_tier3_task(
     .await?
     .selection;
 
-    let chunks = search::query_codebase(
-        pool,
-        input.target_project.trim(),
-        task.objective.trim(),
-        input.top_k.unwrap_or(8).max(3),
-    )
-    .await
-    .unwrap_or_default();
-    let target_file = select_tier3_target_file(&chunks, &task.domain, &task.objective)
-        .unwrap_or_else(|| "src/App.tsx".to_string());
+    let stored_target_files: Vec<String> = task
+        .target_files
+        .as_deref()
+        .and_then(|json| serde_json::from_str(json).ok())
+        .unwrap_or_default();
+
+    let (target_file, chunks) = if !stored_target_files.is_empty() {
+        (stored_target_files[0].clone(), Vec::new())
+    } else {
+        let chunks = search::query_codebase(
+            pool,
+            input.target_project.trim(),
+            task.objective.trim(),
+            input.top_k.unwrap_or(8).max(3),
+        )
+        .await
+        .unwrap_or_default();
+        let file = select_tier3_target_file(&chunks, &task.domain, &task.objective)
+            .unwrap_or_else(|| "src/App.tsx".to_string());
+        (file, chunks)
+    };
     let code_context = hydrate_tier3_code_context(&chunks, &target_file, 2);
     let file_content = read_tier3_file_with_fallback(bridge_client, input, &target_file).await;
 
@@ -1051,6 +1069,7 @@ pub async fn analyze_objective(
             token_budget: (input.global_token_budget / 10).max(100) as i64,
             risk_factor: 0.0,
             status: TaskStatus::Executing,
+            target_files: None,
         },
     )
     .await?;
@@ -1297,6 +1316,11 @@ pub async fn generate_plan(
             &objective,
         );
 
+        let target_files_json = if llm_task.target_files.is_empty() {
+            None
+        } else {
+            Some(serde_json::to_string(&llm_task.target_files).unwrap_or_default())
+        };
         let created = tasks::create_task_record(
             pool,
             CreateTaskRecordInput {
@@ -1307,6 +1331,7 @@ pub async fn generate_plan(
                 token_budget: budgets[idx].max(1) as i64,
                 risk_factor: f64::from(risk_factor),
                 status: TaskStatus::Paused,
+                target_files: target_files_json,
             },
         )
         .await?;

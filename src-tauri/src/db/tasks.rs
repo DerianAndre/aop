@@ -46,6 +46,7 @@ pub struct TaskRecord {
     pub retry_count: i64,
     pub created_at: i64,
     pub updated_at: i64,
+    pub target_files: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -67,6 +68,7 @@ pub struct CreateTaskRecordInput {
     pub token_budget: i64,
     pub risk_factor: f64,
     pub status: TaskStatus,
+    pub target_files: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -129,6 +131,7 @@ pub async fn create_task(pool: &SqlitePool, input: CreateTaskInput) -> Result<Ta
             token_budget: input.token_budget,
             risk_factor: 0.0,
             status: TaskStatus::Pending,
+            target_files: None,
         },
     )
     .await
@@ -154,9 +157,9 @@ pub async fn create_task_record(
             id, parent_id, tier, domain, objective, status,
             token_budget, token_usage, context_efficiency_ratio, risk_factor,
             compliance_score, checksum_before, checksum_after, error_message,
-            retry_count, created_at, updated_at
+            retry_count, created_at, updated_at, target_files
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0.0, ?, 0, NULL, NULL, NULL, 0, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0.0, ?, 0, NULL, NULL, NULL, 0, ?, ?, ?)
         "#,
     )
     .bind(&id)
@@ -169,6 +172,7 @@ pub async fn create_task_record(
     .bind(input.risk_factor)
     .bind(now)
     .bind(now)
+    .bind(input.target_files.as_deref())
     .execute(pool)
     .await
     .map_err(|error| format!("Failed to create task: {error}"))?;
@@ -182,7 +186,7 @@ pub async fn get_tasks(pool: &SqlitePool) -> Result<Vec<TaskRecord>, String> {
         SELECT
             id, parent_id, tier, domain, objective, status, token_budget, token_usage,
             context_efficiency_ratio, risk_factor, compliance_score, checksum_before,
-            checksum_after, error_message, retry_count, created_at, updated_at
+            checksum_after, error_message, retry_count, created_at, updated_at, target_files
         FROM aop_tasks
         ORDER BY created_at DESC
         "#,
@@ -472,7 +476,7 @@ pub async fn get_task_by_id(pool: &SqlitePool, task_id: &str) -> Result<TaskReco
         SELECT
             id, parent_id, tier, domain, objective, status, token_budget, token_usage,
             context_efficiency_ratio, risk_factor, compliance_score, checksum_before,
-            checksum_after, error_message, retry_count, created_at, updated_at
+            checksum_after, error_message, retry_count, created_at, updated_at, target_files
         FROM aop_tasks
         WHERE id = ?
         "#,

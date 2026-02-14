@@ -82,6 +82,12 @@ pub async fn execute_domain_task(
         ));
     }
 
+    let stored_target_files: Vec<String> = task
+        .target_files
+        .as_deref()
+        .and_then(|json| serde_json::from_str(json).ok())
+        .unwrap_or_default();
+
     tasks::update_task_status(
         pool,
         UpdateTaskStatusInput {
@@ -97,40 +103,48 @@ pub async fn execute_domain_task(
         "tier2_execution_started",
         &task.id,
         &format!(
-            "domain={} model={}/{} objective={}",
-            task.domain, tier2_model.provider, tier2_model.model_id, task.objective
+            "domain={} model={}/{} objective={} storedTargetFiles={}",
+            task.domain, tier2_model.provider, tier2_model.model_id, task.objective,
+            stored_target_files.len()
         ),
     )
     .await?;
 
-    let chunks = search::query_codebase(
-        pool,
-        &input.target_project,
-        &task.objective,
-        input.top_k.unwrap_or(8).max(3),
-    )
-    .await
-    .unwrap_or_default();
+    // Skip expensive vector search when we already have target files from the plan
+    let (chunks, candidate_files) = if !stored_target_files.is_empty() {
+        (Vec::new(), stored_target_files.clone())
+    } else {
+        let chunks = search::query_codebase(
+            pool,
+            &input.target_project,
+            &task.objective,
+            input.top_k.unwrap_or(8).max(3),
+        )
+        .await
+        .unwrap_or_default();
 
-    let candidate_files = collect_candidate_files(
-        bridge_client,
-        &input.target_project,
-        &task.domain,
-        &task.objective,
-        &chunks,
-        &input,
-    )
-    .await;
+        let candidate_files = collect_candidate_files(
+            bridge_client,
+            &input.target_project,
+            &task.domain,
+            &task.objective,
+            &chunks,
+            &input,
+        )
+        .await;
+        (chunks, candidate_files)
+    };
     task_runtime::record_task_activity(
         pool,
         "tier2_domain_leader",
         "tier2_context_ready",
         &task.id,
         &format!(
-            "semanticChunks={} candidateFiles={} personas={}",
+            "semanticChunks={} candidateFiles={} personas={} storedFiles={}",
             chunks.len(),
             candidate_files.len(),
-            personas_for_domain(&task.domain).len()
+            personas_for_domain(&task.domain).len(),
+            stored_target_files.len()
         ),
     )
     .await?;
@@ -159,14 +173,25 @@ pub async fn execute_domain_task(
 
         let specialist_objective =
             build_specialist_objective(&task.domain, &task.objective, persona.as_str(), idx);
-        let target_file = candidate_files
-            .get(if candidate_files.is_empty() {
-                0
-            } else {
-                idx % candidate_files.len()
-            })
-            .cloned()
-            .unwrap_or_else(|| "src/main.ts".to_string());
+        // File selection priority:
+        // 0. Stored target files from the LLM plan (persisted in DB)
+        // 1. Explicit path mentioned in the objective (e.g., "modify src/lib/format.ts")
+        // 2. For "create new" objectives: inferred path from keywords
+        // 3. Best candidate from vector search (for "modify existing" objectives)
+        // 4. Inferred path as final fallback
+        let target_file = if !stored_target_files.is_empty() {
+            stored_target_files[idx.min(stored_target_files.len() - 1)].clone()
+        } else {
+            extract_explicit_file_path(&specialist_objective)
+                .or_else(|| {
+                    if objective_implies_new_file(&specialist_objective) {
+                        Some(infer_target_path_from_objective(&specialist_objective))
+                    } else {
+                        candidate_files.first().cloned()
+                    }
+                })
+                .unwrap_or_else(|| infer_target_path_from_objective(&specialist_objective))
+        };
         let code_context = hydrate_code_context(&chunks, &target_file, 2);
         let specialist_task_record = tasks::create_task_record(
             pool,
@@ -178,6 +203,9 @@ pub async fn execute_domain_task(
                 token_budget: specialist_budgets[idx] as i64,
                 risk_factor: task.risk_factor,
                 status: TaskStatus::Pending,
+                target_files: Some(
+                    serde_json::to_string(&vec![target_file.clone()]).unwrap_or_default(),
+                ),
             },
         )
         .await?;
@@ -618,32 +646,18 @@ fn score_frontend_path(path: &str) -> i64 {
 }
 
 fn personas_for_domain(domain: &str) -> Vec<String> {
+    // Use a single primary specialist per domain.
+    // Multi-persona (3 specialists on different files) caused:
+    // - Round-robin file assignment giving irrelevant files to some specialists
+    // - 3x token cost for essentially the same objective
+    // - Conflicting diffs on the same file or irrelevant diffs on wrong files
+    // A single focused specialist produces one clean diff on the best file.
     match domain {
-        "auth" => vec![
-            "security_analyst".to_string(),
-            "react_specialist".to_string(),
-            "test_engineer".to_string(),
-        ],
-        "database" => vec![
-            "database_optimizer".to_string(),
-            "test_engineer".to_string(),
-            "style_enforcer".to_string(),
-        ],
-        "frontend" => vec![
-            "react_specialist".to_string(),
-            "test_engineer".to_string(),
-            "style_enforcer".to_string(),
-        ],
-        "api" => vec![
-            "security_analyst".to_string(),
-            "test_engineer".to_string(),
-            "style_enforcer".to_string(),
-        ],
-        _ => vec![
-            "style_enforcer".to_string(),
-            "test_engineer".to_string(),
-            "security_analyst".to_string(),
-        ],
+        "auth" => vec!["security_analyst".to_string()],
+        "database" => vec!["database_optimizer".to_string()],
+        "frontend" => vec!["react_specialist".to_string()],
+        "api" => vec!["api_engineer".to_string()],
+        _ => vec!["generalist".to_string()],
     }
 }
 
@@ -671,27 +685,147 @@ fn distribute_budget_for_specialists(tier2_budget: i64, specialists: usize) -> V
 }
 
 fn build_specialist_objective(
-    domain: &str,
+    _domain: &str,
     parent_objective: &str,
-    persona: &str,
-    specialist_idx: usize,
+    _persona: &str,
+    _specialist_idx: usize,
 ) -> String {
-    let focus = match persona {
-        "security_analyst" => "audit auth and input-validation failure paths",
-        "react_specialist" => "reduce render churn and stabilize component contracts",
-        "database_optimizer" => "improve query paths and migration safety checks",
-        "test_engineer" => "add regression checks for success and failure behavior",
-        "style_enforcer" => "tighten consistency against existing architectural conventions",
-        _ => "refine implementation with lower operational risk",
+    // Pass the user's actual objective directly to the specialist.
+    // The persona hint is already included in the SpecialistTask struct
+    // and referenced in the LLM prompt — prepending generic persona-based
+    // instructions caused the LLM to ignore the real objective.
+    parent_objective.trim().to_string()
+}
+
+/// Detect whether an objective is about creating something NEW (vs modifying existing code).
+/// "Add a TypeScript utility function" → new file (no existing file to modify)
+/// "Add error handling to the login form" → modify existing
+/// "Create a React component for user settings" → new file
+/// "Fix the bug in UserForm.tsx" → modify existing
+fn objective_implies_new_file(objective: &str) -> bool {
+    let lower = objective.to_ascii_lowercase();
+
+    // Phrases that strongly indicate creating a new artifact
+    let creation_patterns = [
+        "add a ", "add an ", "add new ",
+        "create a ", "create an ", "create new ",
+        "implement a ", "implement an ", "implement new ",
+        "write a ", "write an ", "write new ",
+        "build a ", "build an ", "build new ",
+        "add unit test", "add test", "write test", "create test",
+    ];
+
+    if !creation_patterns.iter().any(|p| lower.contains(p)) {
+        return false;
+    }
+
+    // Exclude objectives that reference an EXISTING specific file to modify
+    // "Add error handling to UserForm.tsx" → modifying existing
+    let modification_signals = [" to the ", " in the ", " on the ", " from the "];
+    let has_modification_target = modification_signals.iter().any(|s| lower.contains(s));
+
+    // If there's a modification target AND no explicit new-file indicator, treat as modify
+    if has_modification_target && !lower.contains("new ") {
+        return false;
+    }
+
+    true
+}
+
+/// Extract an explicit file path mentioned in the objective text.
+/// Objectives like "Add tests in `src/lib/__tests__/format.test.ts`" or
+/// "modify src/components/Foo.tsx" contain the target path directly — this
+/// is always more reliable than vector search which can return irrelevant files.
+fn extract_explicit_file_path(objective: &str) -> Option<String> {
+    let extensions = [
+        ".ts", ".tsx", ".js", ".jsx", ".py", ".rs", ".css", ".json", ".md", ".vue", ".svelte",
+    ];
+
+    for word in objective.split_whitespace() {
+        // Strip surrounding punctuation, backticks, quotes, parentheses
+        let cleaned = word.trim_matches(|ch: char| {
+            ch == '`' || ch == '\'' || ch == '"' || ch == '(' || ch == ')' || ch == ','
+                || ch == ';' || ch == ':' || ch == '.' && !word.contains('/')
+        });
+        if cleaned.len() < 4 {
+            continue;
+        }
+
+        let has_extension = extensions.iter().any(|ext| cleaned.ends_with(ext));
+        let has_path_sep = cleaned.contains('/') || cleaned.contains('\\');
+
+        if has_extension && has_path_sep {
+            // Normalize backslashes to forward slashes
+            return Some(cleaned.replace('\\', "/"));
+        }
+    }
+    None
+}
+
+/// Infer a reasonable target file path when vector search finds no candidates.
+/// This extracts keywords from the objective to build a plausible path like
+/// `src/utils/format-tokens.ts` instead of the useless `src/main.ts` fallback.
+fn infer_target_path_from_objective(objective: &str) -> String {
+    let lower = objective.to_ascii_lowercase();
+
+    // Extract meaningful words (skip common verbs and articles)
+    let skip_words: HashSet<&str> = [
+        "add", "create", "implement", "make", "build", "write", "update", "fix", "a", "an",
+        "the", "that", "which", "with", "for", "from", "into", "to", "and", "or", "of", "in",
+        "new", "function", "class", "method", "module", "file", "utility", "helper", "component",
+        "unit", "test", "tests", "testing", "regression", "checks", "typescript", "react",
+    ]
+    .into_iter()
+    .collect();
+
+    let keywords: Vec<&str> = lower
+        .split(|ch: char| !ch.is_alphanumeric() && ch != '_' && ch != '-')
+        .filter(|word| word.len() >= 3 && !skip_words.contains(word))
+        .take(3)
+        .collect();
+
+    let is_test = lower.contains("test") || lower.contains("spec");
+
+    let filename = if keywords.is_empty() {
+        "index".to_string()
+    } else {
+        let base = keywords.join("-");
+        if is_test && !base.contains("test") {
+            format!("{base}.test")
+        } else {
+            base
+        }
     };
 
-    format!(
-        "[{}:{}] {} for objective: {}",
-        domain,
-        specialist_idx + 1,
-        focus,
-        parent_objective.trim()
-    )
+    // Determine extension from objective context
+    let ext = if lower.contains("typescript") || lower.contains(".ts") {
+        "ts"
+    } else if lower.contains("react") || lower.contains("component") || lower.contains(".tsx") {
+        "tsx"
+    } else if lower.contains("python") || lower.contains(".py") {
+        "py"
+    } else if lower.contains("rust") || lower.contains(".rs") {
+        "rs"
+    } else {
+        "ts"
+    };
+
+    // Determine directory from objective context
+    let dir = if is_test {
+        "src/__tests__"
+    } else if lower.contains("util") || lower.contains("helper") {
+        "src/utils"
+    } else if lower.contains("component") || lower.contains("react") {
+        "src/components"
+    } else if lower.contains("hook") {
+        "src/hooks"
+    } else if lower.contains("test") || lower.contains("spec") {
+        "src/__tests__"
+    } else {
+        "src"
+    };
+
+    format!("{dir}/{filename}.{ext}")
 }
 
 fn hydrate_code_context(
