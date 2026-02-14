@@ -36,6 +36,7 @@ const DEFAULT_FLAGS: RuntimeFlags = {
   modelAdapterEnabled: true,
   modelAdapterStrict: false,
   autoApproveBudgetRequests: true,
+  autoCommitMutations: false,
   budgetHeadroomPercent: 25,
   budgetAutoMaxPercent: 40,
   budgetMinIncrement: 250,
@@ -265,6 +266,14 @@ export function SystemView() {
                 checked={flags.autoApproveBudgetRequests}
                 id="flag-auto-approve"
                 onCheckedChange={(checked) => setFlags((current) => ({ ...current, autoApproveBudgetRequests: checked }))}
+              />
+            </div>
+            <div className="flex items-center justify-between rounded-md border p-3">
+              <Label htmlFor="flag-auto-commit">Auto Commit Mutations</Label>
+              <Switch
+                checked={flags.autoCommitMutations}
+                id="flag-auto-commit"
+                onCheckedChange={(checked) => setFlags((current) => ({ ...current, autoCommitMutations: checked }))}
               />
             </div>
           </div>

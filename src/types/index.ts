@@ -543,6 +543,7 @@ export interface RuntimeFlags {
   modelAdapterEnabled: boolean
   modelAdapterStrict: boolean
   autoApproveBudgetRequests: boolean
+  autoCommitMutations: boolean
   budgetHeadroomPercent: number
   budgetAutoMaxPercent: number
   budgetMinIncrement: number

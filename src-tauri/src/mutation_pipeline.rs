@@ -544,29 +544,40 @@ async fn apply_and_commit_mutation(
     .await?;
     let _ = fs::remove_file(&patch_path);
 
-    run_command_owned(
-        &target_root,
-        "git",
-        vec!["add".to_string(), mutation.file_path.clone()],
-        APPLY_TIMEOUT,
-    )
-    .await?;
-    run_command_owned(
-        &target_root,
-        "git",
-        vec![
-            "commit".to_string(),
-            "-m".to_string(),
-            format!("chore(aop): apply mutation {}", mutation.id),
-        ],
-        APPLY_TIMEOUT,
-    )
-    .await?;
+    let auto_commit = std::env::var("AOP_AUTO_COMMIT_MUTATIONS")
+        .map(|v| matches!(v.trim(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false);
 
-    Ok(format!(
-        "Patch applied and committed for '{}'.",
-        mutation.file_path
-    ))
+    if auto_commit {
+        run_command_owned(
+            &target_root,
+            "git",
+            vec!["add".to_string(), mutation.file_path.clone()],
+            APPLY_TIMEOUT,
+        )
+        .await?;
+        run_command_owned(
+            &target_root,
+            "git",
+            vec![
+                "commit".to_string(),
+                "-m".to_string(),
+                format!("chore(aop): apply mutation {}", mutation.id),
+            ],
+            APPLY_TIMEOUT,
+        )
+        .await?;
+
+        Ok(format!(
+            "Patch applied and committed for '{}'.",
+            mutation.file_path
+        ))
+    } else {
+        Ok(format!(
+            "Patch applied for '{}' (auto-commit disabled).",
+            mutation.file_path
+        ))
+    }
 }
 
 fn checksum_for_target_file(

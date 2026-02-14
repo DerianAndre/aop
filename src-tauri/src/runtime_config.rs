@@ -7,6 +7,7 @@ pub struct RuntimeFlags {
     pub model_adapter_enabled: bool,
     pub model_adapter_strict: bool,
     pub auto_approve_budget_requests: bool,
+    pub auto_commit_mutations: bool,
     pub budget_headroom_percent: f64,
     pub budget_auto_max_percent: f64,
     pub budget_min_increment: i64,
@@ -27,6 +28,7 @@ pub struct SetRuntimeFlagsInput {
     pub model_adapter_enabled: Option<bool>,
     pub model_adapter_strict: Option<bool>,
     pub auto_approve_budget_requests: Option<bool>,
+    pub auto_commit_mutations: Option<bool>,
     pub budget_headroom_percent: Option<f64>,
     pub budget_auto_max_percent: Option<f64>,
     pub budget_min_increment: Option<i64>,
@@ -40,6 +42,7 @@ impl RuntimeFlags {
             model_adapter_enabled: env_bool("AOP_MODEL_ADAPTER_ENABLED", true),
             model_adapter_strict: env_bool("AOP_MODEL_ADAPTER_STRICT", false),
             auto_approve_budget_requests: env_bool("AOP_AUTO_APPROVE_BUDGET_REQUESTS", true),
+            auto_commit_mutations: env_bool("AOP_AUTO_COMMIT_MUTATIONS", false),
             budget_headroom_percent: env_f64("AOP_BUDGET_HEADROOM_PERCENT", 25.0, 1.0, 95.0),
             budget_auto_max_percent: env_f64("AOP_BUDGET_AUTO_MAX_PERCENT", 40.0, 5.0, 100.0),
             budget_min_increment: env_i64("AOP_BUDGET_MIN_INCREMENT", 250, 50, 100_000),
@@ -59,6 +62,9 @@ impl RuntimeFlags {
         }
         if let Some(value) = input.auto_approve_budget_requests {
             self.auto_approve_budget_requests = value;
+        }
+        if let Some(value) = input.auto_commit_mutations {
+            self.auto_commit_mutations = value;
         }
         if let Some(value) = input.budget_headroom_percent {
             self.budget_headroom_percent = value.clamp(1.0, 95.0);
@@ -87,6 +93,10 @@ impl RuntimeFlags {
         std::env::set_var(
             "AOP_AUTO_APPROVE_BUDGET_REQUESTS",
             bool_to_env(self.auto_approve_budget_requests),
+        );
+        std::env::set_var(
+            "AOP_AUTO_COMMIT_MUTATIONS",
+            bool_to_env(self.auto_commit_mutations),
         );
         std::env::set_var(
             "AOP_BUDGET_HEADROOM_PERCENT",
