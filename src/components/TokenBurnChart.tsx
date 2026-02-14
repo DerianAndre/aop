@@ -11,6 +11,7 @@ import {
   YAxis,
 } from 'recharts'
 
+import { formatTokenCount } from '@/lib/format'
 import type { TaskRecord } from '@/types'
 
 interface TokenBurnChartProps {
@@ -22,6 +23,7 @@ interface ChartPoint {
   index: number
   label: string
   tokens: number
+  formattedTokens: string
 }
 
 function buildSeries(tasks: TaskRecord[]): ChartPoint[] {
@@ -36,6 +38,7 @@ function buildSeries(tasks: TaskRecord[]): ChartPoint[] {
       index: index + 1,
       label: `T${task.tier}-${task.id.slice(0, 4)}`,
       tokens: cumulativeTokens,
+      formattedTokens: formatTokenCount(cumulativeTokens),
       compliance: cumulativeCompliance,
     }
   })
@@ -78,7 +81,7 @@ function TokenBurnChart({ tasks }: TokenBurnChartProps) {
           <XAxis dataKey="label" minTickGap={20} />
           <YAxis yAxisId="left" />
           <YAxis orientation="right" yAxisId="right" />
-          <Tooltip />
+          <Tooltip formatter={(value, name) => name === 'tokens' ? formatTokenCount(value as number) : value} />
           <Legend />
           <Line
             dataKey="tokens"

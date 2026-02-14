@@ -575,6 +575,10 @@ fn checksum_for_target_file(
 ) -> Result<String, String> {
     let root = normalize_target_root(target_project)?;
     let target_file = resolve_target_file(&root, relative_file_path)?;
+    if !target_file.exists() {
+        // New file — no content to checksum yet
+        return Ok("new_file".to_string());
+    }
     let bytes = fs::read(target_file)
         .map_err(|error| format!("Failed to read target file for checksum: {error}"))?;
     let mut hasher = Sha256::new();
@@ -621,19 +625,29 @@ fn resolve_target_file(project_root: &Path, relative_file_path: &str) -> Result<
         .split('/')
         .filter(|part| !part.is_empty())
         .fold(project_root.to_path_buf(), |acc, part| acc.join(part));
-    let canonicalized = strip_unc_prefix(
-        fs::canonicalize(&path)
-            .map_err(|error| format!("Failed to resolve mutation file '{}': {error}", path.display()))?,
-    );
-    // Canonicalize project_root too so both use the same format
-    let canonical_root = strip_unc_prefix(
-        fs::canonicalize(project_root).unwrap_or_else(|_| project_root.to_path_buf()),
-    );
-    if !canonicalized.starts_with(&canonical_root) {
-        return Err("mutation file path escapes target project root".to_string());
-    }
 
-    Ok(canonicalized)
+    // For existing files, canonicalize to verify the path stays within project root.
+    // For new files (created by git apply), skip canonicalize since the file doesn't
+    // exist yet — just verify the constructed path starts with the project root.
+    if path.exists() {
+        let canonicalized = strip_unc_prefix(
+            fs::canonicalize(&path)
+                .map_err(|error| format!("Failed to resolve mutation file '{}': {error}", path.display()))?,
+        );
+        let canonical_root = strip_unc_prefix(
+            fs::canonicalize(project_root).unwrap_or_else(|_| project_root.to_path_buf()),
+        );
+        if !canonicalized.starts_with(&canonical_root) {
+            return Err("mutation file path escapes target project root".to_string());
+        }
+        Ok(canonicalized)
+    } else {
+        // New file — verify the path doesn't escape project root by checking prefix
+        if !path.starts_with(project_root) {
+            return Err("mutation file path escapes target project root".to_string());
+        }
+        Ok(path)
+    }
 }
 
 fn create_shadow_dir() -> Result<PathBuf, String> {

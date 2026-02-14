@@ -79,6 +79,18 @@ pub struct ApproveOrchestrationPlanInput {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct MutationSummary {
+    pub id: String,
+    pub task_id: String,
+    pub file_path: String,
+    pub status: String,
+    pub intent_description: Option<String>,
+    pub confidence: f64,
+    pub rejection_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PlanExecutionResult {
     pub root_task: TaskRecord,
     pub executed_task_ids: Vec<String>,
@@ -87,6 +99,7 @@ pub struct PlanExecutionResult {
     pub applied_mutations: u32,
     pub failed_executions: u32,
     pub message: String,
+    pub mutation_summaries: Vec<MutationSummary>,
 }
 
 // --- New types for LLM-driven orchestration ---
@@ -517,23 +530,47 @@ pub async fn approve_plan_and_spawn(
         }
 
         executed_task_ids.push(planned_task.id.clone());
-        let apply_summary =
-            apply_mutations_for_task(pool, &planned_task.id, input.target_project.trim()).await?;
-        applied_mutations = applied_mutations.saturating_add(apply_summary.applied_mutations);
-        if apply_summary.failed_runs > 0 {
+
+        // Collect all task IDs that may have mutations:
+        // - Tier 3 tasks have mutations directly on their own ID
+        // - Tier 2 tasks delegate to tier 3 sub-tasks — mutations are on those sub-task IDs
+        let mut apply_task_ids = vec![planned_task.id.clone()];
+        if planned_task.tier == 2 {
+            let sub_tree = tasks::collect_task_tree_ids(pool, &planned_task.id).await?;
+            for sub_id in sub_tree.into_iter().skip(1) {
+                apply_task_ids.push(sub_id);
+            }
+        }
+
+        let mut task_applied = 0_u32;
+        let mut task_failed_runs = 0_u32;
+        let mut task_first_error: Option<String> = None;
+
+        for apply_id in &apply_task_ids {
+            let apply_summary =
+                apply_mutations_for_task(pool, apply_id, input.target_project.trim()).await?;
+            task_applied = task_applied.saturating_add(apply_summary.applied_mutations);
+            task_failed_runs = task_failed_runs.saturating_add(apply_summary.failed_runs);
+            if task_first_error.is_none() {
+                task_first_error = apply_summary.first_error;
+            }
+        }
+
+        applied_mutations = applied_mutations.saturating_add(task_applied);
+        if task_failed_runs > 0 {
             failed_executions = failed_executions.saturating_add(1);
-            if let Some(first_error) = apply_summary.first_error {
+            if let Some(first_error) = task_first_error {
                 notes.push(format!(
                     "task {} apply failures={} firstError={}",
-                    planned_task.id, apply_summary.failed_runs, first_error
+                    planned_task.id, task_failed_runs, first_error
                 ));
             } else {
                 notes.push(format!(
                     "task {} apply failures={}",
-                    planned_task.id, apply_summary.failed_runs
+                    planned_task.id, task_failed_runs
                 ));
             }
-        } else if apply_summary.applied_mutations == 0 {
+        } else if task_applied == 0 {
             notes.push(format!(
                 "task {} produced no applied mutations (review gate or no candidates).",
                 planned_task.id
@@ -591,6 +628,41 @@ pub async fn approve_plan_and_spawn(
     )
     .await?;
 
+    // Collect mutation summaries for all executed tasks + their descendants
+    let mut all_mutation_task_ids = Vec::new();
+    for exec_id in &executed_task_ids {
+        all_mutation_task_ids.push(exec_id.clone());
+        if let Ok(sub_ids) = tasks::collect_task_tree_ids(pool, exec_id).await {
+            for sub_id in sub_ids.into_iter().skip(1) {
+                all_mutation_task_ids.push(sub_id);
+            }
+        }
+    }
+
+    let mut mutation_summaries = Vec::new();
+    for mt_id in &all_mutation_task_ids {
+        if let Ok(muts) = mutations::list_mutations_for_task(
+            pool,
+            ListTaskMutationsInput {
+                task_id: mt_id.clone(),
+            },
+        )
+        .await
+        {
+            for m in muts {
+                mutation_summaries.push(MutationSummary {
+                    id: m.id,
+                    task_id: m.task_id,
+                    file_path: m.file_path,
+                    status: m.status,
+                    intent_description: m.intent_description,
+                    confidence: m.confidence,
+                    rejection_reason: m.rejection_reason,
+                });
+            }
+        }
+    }
+
     Ok(PlanExecutionResult {
         root_task: updated_root,
         executed_task_ids,
@@ -599,6 +671,7 @@ pub async fn approve_plan_and_spawn(
         applied_mutations,
         failed_executions,
         message,
+        mutation_summaries,
     })
 }
 

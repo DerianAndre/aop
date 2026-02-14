@@ -152,8 +152,10 @@ export function DashboardView() {
     void loadTasks()
   }, [loadTasks])
 
+  const isAnyPhaseActive = isOrchestrating || isAnalyzing || isGeneratingPlan || isApprovingPlan
+
   useEffect(() => {
-    if (!isOrchestrating) {
+    if (!isAnyPhaseActive) {
       return
     }
 
@@ -162,7 +164,7 @@ export function DashboardView() {
     }, 1200)
 
     return () => clearInterval(intervalRef)
-  }, [isOrchestrating, loadTasks])
+  }, [isAnyPhaseActive, loadTasks])
 
   async function handleOrchestrate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -726,18 +728,77 @@ export function DashboardView() {
               ) : null}
 
               {planExecutionResult ? (
-                <div className={`rounded-md border p-3 ${planExecutionResult.failedExecutions > 0 && planExecutionResult.appliedMutations === 0 ? 'border-destructive/30 bg-destructive/5' : planExecutionResult.failedExecutions > 0 ? 'border-yellow-500/30 bg-yellow-500/5' : 'border-green-500/30 bg-green-500/5'}`}>
-                  <p className="text-sm font-semibold mb-1">
-                    {planExecutionResult.appliedMutations > 0
-                      ? `${planExecutionResult.appliedMutations} mutation(s) applied`
-                      : 'No mutations applied'}
-                    {planExecutionResult.failedExecutions > 0
-                      ? ` · ${planExecutionResult.failedExecutions} failed`
-                      : ''}
-                  </p>
-                  <pre className="text-xs whitespace-pre-wrap max-h-48 overflow-auto text-muted-foreground">
-                    {planExecutionResult.message}
-                  </pre>
+                <div
+                  className={`rounded-md border p-4 space-y-3 ${
+                    planExecutionResult.failedExecutions > 0 && planExecutionResult.appliedMutations === 0
+                      ? 'border-destructive/30 bg-destructive/5'
+                      : planExecutionResult.failedExecutions > 0
+                        ? 'border-yellow-500/30 bg-yellow-500/5'
+                        : planExecutionResult.appliedMutations > 0
+                          ? 'border-green-500/30 bg-green-500/5'
+                          : 'border-muted'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm font-semibold">
+                      {planExecutionResult.appliedMutations > 0 && planExecutionResult.failedExecutions === 0
+                        ? 'Execution Complete'
+                        : planExecutionResult.failedExecutions > 0 && planExecutionResult.appliedMutations === 0
+                          ? 'Execution Failed'
+                          : planExecutionResult.failedExecutions > 0
+                            ? 'Partial Execution'
+                            : 'No Changes'}
+                    </p>
+                    <span className="text-muted-foreground text-xs">
+                      {planExecutionResult.appliedMutations} applied · {planExecutionResult.failedExecutions} failed · {planExecutionResult.executedTaskIds.length} tasks
+                    </span>
+                  </div>
+
+                  {planExecutionResult.mutationSummaries.length > 0 ? (
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium text-muted-foreground">Changed Files</p>
+                      {planExecutionResult.mutationSummaries.map((m) => (
+                        <div className="flex items-start gap-2 rounded border px-2 py-1.5" key={m.id}>
+                          <span
+                            className={`mt-0.5 shrink-0 rounded px-1 py-0.5 text-[10px] font-medium ${
+                              m.status === 'applied'
+                                ? 'bg-green-500/15 text-green-700 dark:text-green-400'
+                                : m.status === 'rejected'
+                                  ? 'bg-destructive/15 text-destructive'
+                                  : 'bg-muted text-muted-foreground'
+                            }`}
+                          >
+                            {m.status}
+                          </span>
+                          <div className="min-w-0 flex-1">
+                            <code className="text-xs break-all">{m.filePath}</code>
+                            {m.intentDescription ? (
+                              <p className="text-muted-foreground text-[11px] mt-0.5">{m.intentDescription}</p>
+                            ) : null}
+                            {m.rejectionReason ? (
+                              <p className="text-destructive text-[11px] mt-0.5">{m.rejectionReason}</p>
+                            ) : null}
+                          </div>
+                          <span className="text-muted-foreground text-[10px] shrink-0">
+                            {(m.confidence * 100).toFixed(0)}%
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-muted-foreground text-xs">
+                      No mutations were generated. Check the activity log for details.
+                    </p>
+                  )}
+
+                  <details className="text-xs">
+                    <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+                      Raw execution log
+                    </summary>
+                    <pre className="mt-1 whitespace-pre-wrap max-h-48 overflow-auto text-muted-foreground rounded bg-muted p-2 text-[11px]">
+                      {planExecutionResult.message}
+                    </pre>
+                  </details>
                 </div>
               ) : null}
 

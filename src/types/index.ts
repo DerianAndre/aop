@@ -95,6 +95,16 @@ export interface ApproveOrchestrationPlanInput {
   mcpArgs?: string[]
 }
 
+export interface MutationSummary {
+  id: string
+  taskId: string
+  filePath: string
+  status: string
+  intentDescription: string | null
+  confidence: number
+  rejectionReason: string | null
+}
+
 export interface PlanExecutionResult {
   rootTask: TaskRecord
   executedTaskIds: string[]
@@ -103,6 +113,7 @@ export interface PlanExecutionResult {
   appliedMutations: number
   failedExecutions: number
   message: string
+  mutationSummaries: MutationSummary[]
 }
 
 export interface ExecuteDomainTaskInput {
