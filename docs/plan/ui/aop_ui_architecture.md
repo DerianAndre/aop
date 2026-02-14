@@ -1,3 +1,4 @@
+<!-- AOP(test_engineer): Add tests for: Add a TypeScript utility function that formats token counts with K/M suffixes (e.g., 1500 → "1.5K", 20000 -->
 # AOP UI/UX Architecture Plan
 
 **Document**: AOP-UI-001  
