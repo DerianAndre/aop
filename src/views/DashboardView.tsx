@@ -392,7 +392,7 @@ export function DashboardView() {
     () => tasks.find((task) => task.tier === 1 && task.status === 'executing')?.id ?? null,
     [tasks],
   )
-  const monitoredTaskId = orchestrationResult?.rootTask.id ?? executingTier1TaskId
+  const monitoredTaskId = orchestrationResult?.rootTask.id ?? analysisResult?.rootTaskId ?? executingTier1TaskId
   const canPauseMonitoredTask = monitoredTaskId ? pausableTaskIds.has(monitoredTaskId) : false
   const canResumeMonitoredTask = monitoredTaskId ? resumableTaskIds.has(monitoredTaskId) : false
   const canStopMonitoredTask = monitoredTaskId ? stoppableTaskIds.has(monitoredTaskId) : false
@@ -524,6 +524,18 @@ export function DashboardView() {
             </div>
           </form>
 
+          {isAnalyzing ? (
+            <div className="space-y-3 rounded-md border border-blue-500/30 bg-blue-500/5 p-4">
+              <div className="flex items-center gap-2">
+                <div className="size-2 animate-pulse rounded-full bg-blue-500" />
+                <h4 className="text-sm font-semibold">Analyzing Objective...</h4>
+              </div>
+              <p className="text-muted-foreground text-xs">
+                Collecting source files, selecting Tier 1 model, calling LLM for analysis and clarifying questions.
+              </p>
+            </div>
+          ) : null}
+
           {analysisResult && !generatedPlan ? (
             <div className="space-y-4 rounded-md border p-4">
               <div>
@@ -535,6 +547,16 @@ export function DashboardView() {
                   <h4 className="text-sm font-semibold">Suggested Approach</h4>
                   <p className="text-muted-foreground text-sm">{analysisResult.suggestedApproach}</p>
                 </div>
+              ) : null}
+              {analysisResult.fileTreeSummary ? (
+                <details className="text-xs">
+                  <summary className="cursor-pointer text-sm font-semibold">
+                    Project File Tree
+                  </summary>
+                  <pre className="text-muted-foreground mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-muted p-2 text-[11px]">
+                    {analysisResult.fileTreeSummary}
+                  </pre>
+                </details>
               ) : null}
               {analysisResult.questions.length > 0 ? (
                 <div className="space-y-3">
@@ -568,6 +590,18 @@ export function DashboardView() {
               >
                 {isGeneratingPlan ? 'Generating Plan...' : 'Submit Answers & Generate Plan'}
               </Button>
+            </div>
+          ) : null}
+
+          {isGeneratingPlan ? (
+            <div className="space-y-3 rounded-md border border-blue-500/30 bg-blue-500/5 p-4">
+              <div className="flex items-center gap-2">
+                <div className="size-2 animate-pulse rounded-full bg-blue-500" />
+                <h4 className="text-sm font-semibold">Generating Plan...</h4>
+              </div>
+              <p className="text-muted-foreground text-xs">
+                LLM is processing your answers and generating a detailed task plan with assignments, budgets, and risk factors.
+              </p>
             </div>
           ) : null}
 

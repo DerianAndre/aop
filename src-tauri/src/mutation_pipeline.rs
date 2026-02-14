@@ -608,9 +608,12 @@ fn resolve_target_file(project_root: &Path, relative_file_path: &str) -> Result<
         .split('/')
         .filter(|part| !part.is_empty())
         .fold(project_root.to_path_buf(), |acc, part| acc.join(part));
-    let canonicalized = fs::canonicalize(path)
-        .map_err(|error| format!("Failed to resolve mutation file: {error}"))?;
-    if !canonicalized.starts_with(project_root) {
+    let canonicalized = fs::canonicalize(&path)
+        .map_err(|error| format!("Failed to resolve mutation file '{}': {error}", path.display()))?;
+    // Canonicalize project_root too so both use the same format (UNC on Windows)
+    let canonical_root = fs::canonicalize(project_root)
+        .unwrap_or_else(|_| project_root.to_path_buf());
+    if !canonicalized.starts_with(&canonical_root) {
         return Err("mutation file path escapes target project root".to_string());
     }
 

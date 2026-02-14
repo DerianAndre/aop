@@ -33,13 +33,14 @@ interface CommandBarProps {
   onApprove: () => void
 }
 
-const ACTION_CONFIG: Record<CcPhase, { label: string; icon: typeof Play; variant: 'default' | 'secondary' | 'outline' }> = {
+const ACTION_CONFIG: Record<CcPhase, { label: string; icon: typeof Play; variant: 'default' | 'secondary' | 'outline' | 'destructive' }> = {
   empty: { label: 'Decompose', icon: Play, variant: 'default' },
   planning: { label: 'Planning...', icon: Loader2, variant: 'secondary' },
   ready: { label: 'Approve & Execute', icon: CheckCircle2, variant: 'default' },
   running: { label: 'Running...', icon: Loader2, variant: 'secondary' },
   review: { label: 'Review Mutations', icon: GitPullRequest, variant: 'default' },
   completed: { label: 'New Objective', icon: Play, variant: 'outline' },
+  failed: { label: 'Retry', icon: Play, variant: 'destructive' },
 }
 
 export default function CommandBar({
@@ -67,7 +68,7 @@ export default function CommandBar({
   const isActionDisabled = isLoading || phase === 'planning' || phase === 'running' || (phase === 'empty' && !objective.trim())
 
   const handleAction = useCallback(() => {
-    if (phase === 'empty' || phase === 'completed') {
+    if (phase === 'empty' || phase === 'completed' || phase === 'failed') {
       onDecompose(objective, budget, risk)
     } else if (phase === 'ready') {
       onApprove()

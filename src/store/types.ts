@@ -11,7 +11,7 @@ export type AppTab =
   | 'logs'
   | 'system'
 
-export type CcPhase = 'empty' | 'planning' | 'ready' | 'running' | 'review' | 'completed'
+export type CcPhase = 'empty' | 'planning' | 'ready' | 'running' | 'review' | 'completed' | 'failed'
 
 export type CcLiveFeedTab = 'activity' | 'terminal' | 'budget' | 'errors'
 

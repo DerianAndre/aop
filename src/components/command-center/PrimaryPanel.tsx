@@ -160,6 +160,28 @@ function CompletedState({ tasks }: { tasks: TaskRecord[] }) {
   )
 }
 
+function FailedState({ tasks }: { tasks: TaskRecord[] }) {
+  const completed = tasks.filter((t) => t.status === 'completed').length
+  const failed = tasks.filter((t) => t.status === 'failed').length
+  const totalTokens = tasks.reduce((sum, t) => sum + t.tokenUsage, 0)
+  const firstError = tasks.find((t) => t.status === 'failed')?.errorMessage
+
+  return (
+    <div className="flex flex-col items-center justify-center h-full gap-4 p-8">
+      <XCircle className="size-10 text-destructive" />
+      <div className="space-y-1 text-center">
+        <h3 className="text-sm font-medium">Orchestration Failed</h3>
+        <p className="text-xs text-muted-foreground">
+          {completed} completed, {failed} failed, {totalTokens.toLocaleString()} tokens used
+        </p>
+        {firstError ? (
+          <p className="text-xs text-destructive/80 max-w-md mt-2">{firstError}</p>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
 export default function PrimaryPanel({
   phase,
   tasks,
@@ -220,6 +242,10 @@ export default function PrimaryPanel({
 
   if (phase === 'completed') {
     return <CompletedState tasks={tasks} />
+  }
+
+  if (phase === 'failed') {
+    return <FailedState tasks={tasks} />
   }
 
   return <EmptyState />

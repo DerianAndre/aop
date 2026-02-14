@@ -43,7 +43,7 @@ function derivePhase(
   if (!rootTask) return 'empty'
 
   if (rootTask.status === 'completed') return 'completed'
-  if (rootTask.status === 'failed') return 'completed'
+  if (rootTask.status === 'failed') return 'failed'
 
   // Check if there are proposed mutations needing review
   const proposedMutations = Array.from(mutations.values()).filter(
